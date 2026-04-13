@@ -24,8 +24,6 @@ def get_all_crawlers() -> dict[EventSource, "BaseCrawler"]:
     from .resident_advisor import ResidentAdvisorCrawler
     from .ticketmaster import TicketmasterCrawler
     from .twitter import TwitterCrawler
-    from .yelp import YelpCrawler
-
     return {
         EventSource.GOOGLE: GoogleEventsCrawler(),
         EventSource.EVENTBRITE: EventbriteCrawler(),
@@ -37,7 +35,6 @@ def get_all_crawlers() -> dict[EventSource, "BaseCrawler"]:
         EventSource.RESIDENT_ADVISOR: ResidentAdvisorCrawler(),
         EventSource.FETLIFE: FetLifeCrawler(),
         EventSource.TICKETMASTER: TicketmasterCrawler(),
-        EventSource.YELP: YelpCrawler(),
         EventSource.DICE: DiceCrawler(),
         EventSource.BLOG: BlogScraperCrawler(),
     }

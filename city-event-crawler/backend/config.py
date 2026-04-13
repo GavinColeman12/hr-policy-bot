@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables and .env file."""
 
     # --------------- API Keys ---------------
-    SERPAPI_KEY: str = Field(default="", description="SerpAPI key for Google search")
+    SERPAPI_KEY: str = Field(default="", description="SearchAPI.io key for Google search")
     EVENTBRITE_TOKEN: str = Field(default="", description="Eventbrite private OAuth token")
     MEETUP_API_KEY: str = Field(default="", description="Meetup GraphQL API key")
     INSTAGRAM_APIFY_TOKEN: str = Field(default="", description="Apify token for Instagram scraper")

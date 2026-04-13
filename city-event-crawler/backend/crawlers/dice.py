@@ -1,4 +1,8 @@
-"""Dice.fm crawler for live music, club nights, and cultural events."""
+"""Dice.fm crawler for live music, club nights, and cultural events.
+
+Uses SearchAPI.io Google to find Dice events since their API requires auth.
+URL format: https://dice.fm/venue/{venue-slug} or https://dice.fm/event/{slug}
+"""
 
 from __future__ import annotations
 
@@ -10,7 +14,6 @@ from .base import BaseCrawler
 
 logger = logging.getLogger(__name__)
 
-# Dice.fm city slugs
 DICE_CITIES = {
     "london": "london", "berlin": "berlin", "paris": "paris",
     "barcelona": "barcelona", "amsterdam": "amsterdam", "lisbon": "lisbon",
@@ -23,12 +26,6 @@ DICE_CITIES = {
 
 
 class DiceCrawler(BaseCrawler):
-    """Crawls Dice.fm for live music and club events.
-
-    Dice.fm is particularly strong for electronic music, live performances,
-    and curated club nights across European cities.
-    """
-
     source = EventSource.DICE
     name = "Dice.fm"
 
@@ -39,16 +36,16 @@ class DiceCrawler(BaseCrawler):
         events = []
         seen = set()
 
-        # Try the Dice API
+        # Strategy 1: Use SearchAPI to find Dice events via Google
+        settings = get_settings()
+        if settings.SERPAPI_KEY:
+            events.extend(await self._search_via_google(city_lower, dice_slug, date, settings.SERPAPI_KEY, seen))
+
+        # Strategy 2: Try Dice API
         api_events = await self._fetch_api(dice_slug, date, seen)
         events.extend(api_events)
 
-        # Fallback: scrape the Dice website
-        if not events:
-            scrape_events = await self._fetch_scrape(dice_slug, date, seen)
-            events.extend(scrape_events)
-
-        # Auto-tag music/nightlife for Dice events
+        # Auto-tag music for Dice events
         for ev in events:
             if EventVibe.MUSIC not in ev.vibes:
                 ev.vibes.append(EventVibe.MUSIC)
@@ -56,8 +53,62 @@ class DiceCrawler(BaseCrawler):
         self._log_info("Found %d events from Dice.fm for %s", len(events), city)
         return self._filter_by_vibes(events, vibes)
 
+    async def _search_via_google(self, city, dice_slug, date, api_key, seen):
+        """Use SearchAPI.io to find Dice.fm events for this city."""
+        queries = [
+            f"site:dice.fm {city} event",
+            f"site:dice.fm {city} venue",
+            f"dice.fm {city} club night tickets",
+        ]
+
+        results = []
+        for q in queries:
+            resp = await self._get("https://www.searchapi.io/api/v1/search", params={
+                "engine": "google", "q": q, "hl": "en", "num": 15, "api_key": api_key,
+            })
+            if not resp:
+                continue
+            try:
+                data = resp.json()
+            except Exception:
+                continue
+
+            for item in data.get("organic_results", []):
+                title = item.get("title", "")
+                link = item.get("link", "")
+
+                if "dice.fm" not in link:
+                    continue
+
+                eid = generate_event_id(self.source.value, title, link)
+                if eid in seen:
+                    continue
+                seen.add(eid)
+
+                desc = clean_text(item.get("snippet"))
+
+                # Extract venue name from title patterns like "Event at Venue"
+                venue_name = None
+                if " at " in title:
+                    venue_name = title.split(" at ")[-1].strip()
+                    # Clean trailing " | Dice" or similar
+                    venue_name = venue_name.split(" | ")[0].split(" · ")[0].strip()
+
+                results.append(Event(
+                    id=eid, title=title.split(" | ")[0].split(" · ")[0].strip(),
+                    description=desc,
+                    date=parse_date(date),
+                    source=self.source, source_url=link,
+                    venue_name=venue_name,
+                    vibes=self.classify_vibes(title, desc),
+                    tags=["dice.fm"],
+                    raw_data=item,
+                ))
+
+        return results
+
     async def _fetch_api(self, city_slug, date, seen):
-        """Try fetching from Dice's internal API."""
+        """Try fetching from Dice's API."""
         resp = await self._get(
             f"https://api.dice.fm/v1/events",
             params={
@@ -65,10 +116,7 @@ class DiceCrawler(BaseCrawler):
                 "filter[date]": date,
                 "page[size]": 50,
             },
-            headers={
-                "Accept": "application/json",
-                "x-dice-version": "3.0",
-            },
+            headers={"Accept": "application/json", "x-dice-version": "3.0"},
         )
         if not resp:
             return []
@@ -79,7 +127,8 @@ class DiceCrawler(BaseCrawler):
             return []
 
         results = []
-        for item in data if isinstance(data, list) else data.get("data", []):
+        items = data if isinstance(data, list) else data.get("data", [])
+        for item in items:
             dice_id = str(item.get("id", ""))
             eid = generate_event_id(self.source.value, dice_id)
             if eid in seen:
@@ -89,88 +138,22 @@ class DiceCrawler(BaseCrawler):
             attrs = item.get("attributes", item)
             venue = attrs.get("venue", {}) or {}
 
-            # Get ticket info
-            price_str = None
-            ticket_info = attrs.get("ticket_types", []) or attrs.get("tickets", [])
-            if ticket_info:
-                prices = [t.get("price", {}).get("total") for t in ticket_info if isinstance(t, dict) and t.get("price")]
-                if prices:
-                    min_p = min(p for p in prices if p)
-                    price_str = f"From {min_p/100:.2f} EUR" if min_p else None
-
             results.append(Event(
                 id=eid,
                 title=attrs.get("name", attrs.get("title", "")),
-                description=clean_text(attrs.get("description") or attrs.get("raw_description")),
+                description=clean_text(attrs.get("description")),
                 date=parse_date(attrs.get("date") or attrs.get("starts_at"), fallback=date),
-                end_date=parse_date(attrs.get("ends_at")),
                 source=self.source,
                 source_url=attrs.get("url") or f"https://dice.fm/event/{dice_id}",
                 venue_name=venue.get("name"),
                 address=venue.get("address"),
                 latitude=venue.get("latitude"),
                 longitude=venue.get("longitude"),
-                image_url=attrs.get("image_url") or attrs.get("cover_image"),
-                price=price_str,
-                attendee_count=attrs.get("sales_count") or attrs.get("going_count"),
-                vibes=self.classify_vibes(
-                    attrs.get("name", ""),
-                    attrs.get("description"),
-                    attrs.get("genres", []),
-                ),
+                image_url=attrs.get("image_url"),
+                attendee_count=attrs.get("sales_count"),
+                vibes=self.classify_vibes(attrs.get("name", ""), attrs.get("description"), attrs.get("genres", [])),
                 tags=attrs.get("genres", []) or [],
                 raw_data=item,
-            ))
-
-        return results
-
-    async def _fetch_scrape(self, city_slug, date, seen):
-        """Fallback: scrape the Dice.fm website."""
-        url = f"https://dice.fm/browse/{city_slug}?date={date}"
-        resp = await self._get(url, headers={"Accept": "text/html"})
-        if not resp:
-            return []
-
-        try:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(resp.text, "html.parser")
-        except ImportError:
-            return []
-
-        results = []
-        for card in soup.select("[class*='EventCard'], [class*='event-card'], a[href*='/event/']"):
-            title_el = card.select_one("h3, h4, [class*='title'], [class*='name']")
-            if not title_el:
-                if card.name == "a" and card.get_text(strip=True):
-                    title = card.get_text(strip=True)[:120]
-                else:
-                    continue
-            else:
-                title = title_el.get_text(strip=True)
-
-            eid = generate_event_id(self.source.value, title, date)
-            if eid in seen:
-                continue
-            seen.add(eid)
-
-            link = card.get("href", "") if card.name == "a" else ""
-            if not link:
-                link_el = card.select_one("a[href]")
-                link = link_el.get("href", "") if link_el else ""
-            if link and not link.startswith("http"):
-                link = f"https://dice.fm{link}"
-
-            venue_el = card.select_one("[class*='venue'], [class*='location']")
-            venue_name = venue_el.get_text(strip=True) if venue_el else None
-
-            results.append(Event(
-                id=eid, title=title,
-                date=parse_date(date),
-                source=self.source, source_url=link or url,
-                venue_name=venue_name,
-                vibes=self.classify_vibes(title),
-                tags=["dice.fm"],
-                raw_data={"scraped": True},
             ))
 
         return results

@@ -1,270 +1,153 @@
-"""Researcher Agent - discovers relevant sources, accounts, and search terms for a city."""
+"""Researcher Agent - auto-discovers Instagram accounts, venues, and sources for a city.
 
+Phase 1: Uses pre-researched data + SearchAPI Google to find:
+  - Instagram accounts (clubs, promoters, venues, event pages)
+  - Relevant subreddits and hashtags
+  - Local event listing sites
+  - Known venues and their social handles
+
+This data feeds into the Crawler Agent so it knows WHERE to look.
+"""
+
+import asyncio
 import logging
+import re
+
+import httpx
+
 from .base_agent import BaseAgent, AgentRole, AgentResult
 
 logger = logging.getLogger(__name__)
 
-# Pre-researched city-specific data for major European cities
-CITY_RESEARCH_DATA = {
+# Pre-researched city-specific seed data
+CITY_SEED_DATA = {
     "budapest": {
-        "subreddits": ["budapest", "hungary", "budapestNightlife", "solotravel"],
-        "instagram_hashtags": [
-            "budapestevents", "budapestnightlife", "budapestparty", "budapestnight",
-            "ruinbar", "ruinpub", "szimplakert", "instantdrinkbar", "akvarium",
-            "budapestunderground", "budapestclub", "budapestlife", "budapestfood",
-            "budapestwine", "budapestbath", "budapestculture", "budapesttechno",
-            "budapestrave", "budapestdating", "budapestexpat", "budapesttonight",
-            "romkocsma", "budapestfestival", "szigetfestival",
+        "instagram_seeds": [
+            "szimplakert", "instantfogas", "akvariumklub", "a38hajo",
+            "corvinteto", "durerkert", "larmbudapest", "aether.budapest",
+            "dobozbudapest", "otkertbudapest", "flashbackbudapest",
+            "budapestpark", "budapestflow", "welovebudapest",
         ],
-        "ra_area_id": 59,
-        "ra_slug": "budapest",
+        "subreddits": ["budapest", "hungary", "solotravel"],
         "known_venues": [
             "Szimpla Kert", "Instant-Fogas", "Akvárium Klub", "A38",
-            "Doboz", "Ötkert", "Corvintető", "Dürer Kert", "Lärm",
-            "Aether", "Toldi", "Központ", "Bobek", "Flashback",
+            "Corvintető", "Dürer Kert", "Lärm", "Aether", "Doboz", "Ötkert",
         ],
-        "meetup_topics": ["nightlife", "social", "expats", "language-exchange", "hiking", "tech"],
-        "twitter_accounts": ["@budapest", "@BudapestGuide", "@WeloveBudapest"],
-        "local_event_sites": [
-            "https://welovebudapest.com/en/programmes",
-            "https://www.timeout.com/budapest/things-to-do",
-            "https://funzine.hu/en/",
-        ],
-        "dice_city_slug": "budapest",
-        "fetlife_location": "Budapest, Hungary",
     },
     "berlin": {
-        "subreddits": ["berlin", "berlinsocialclub", "berghain", "berlintechno"],
-        "instagram_hashtags": [
-            "berlinevents", "berlinnightlife", "berlintechno", "berlinparty",
-            "berghain", "tresor", "kitkatclub", "aboutblank", "berlinrave",
-            "berlinunderground", "berlinclub", "berlinlife", "berlinmusic",
-            "berlinart", "berlinfood", "berlinexpat", "berlintonight",
-            "sisyphos", "berlinculture", "berlinqueer", "berlinkinky",
+        "instagram_seeds": [
+            "beraboredein", "berghain.official", "treaborerlin", "kitkatclub_berlin",
+            "aboutblank.berlin", "sisyphos_berlin", "kaboreerblau", "watergateclub",
+            "wilderenate", "raboreerlin.official", "holzmarkt25",
         ],
-        "ra_area_id": 34,
-        "ra_slug": "berlin",
+        "subreddits": ["berlin", "berlinsocialclub", "berlintechno"],
         "known_venues": [
             "Berghain", "Tresor", "KitKatClub", "About Blank", "Sisyphos",
-            "Watergate", "Wilde Renate", "RSO.Berlin", "Griessmuehle",
-            "://about blank", "Kater Blau", "Holzmarkt", "Salon zur Wilden Renate",
-            "OHM", "Anomalie", "Else", "Ritter Butzke",
+            "Watergate", "Wilde Renate", "Kater Blau", "Holzmarkt", "OHM",
         ],
-        "meetup_topics": ["techno", "social", "expats", "startup", "queer", "kink"],
-        "twitter_accounts": ["@berlaborede", "@VisitBerlin", "@BerlinTechno"],
-        "local_event_sites": [
-            "https://www.residentadvisor.net/events/de/berlin",
-            "https://www.timeout.com/berlin/things-to-do",
-            "https://www.exberliner.com/events/",
-        ],
-        "dice_city_slug": "berlin",
-        "fetlife_location": "Berlin, Germany",
     },
     "prague": {
-        "subreddits": ["prague", "czech", "czechrepublic"],
-        "instagram_hashtags": [
-            "pragueevents", "praguenightlife", "pragueparty", "praguenight",
-            "pragueclub", "praguelife", "praguefood", "pragueexpat",
-            "praguetonight", "praguebar", "praguetechno", "pragueculture",
-            "pragueunderground", "crossclubprague", "karlovylazne",
+        "instagram_seeds": [
+            "crossclubprague", "ankali_prague", "fuchs2club", "roxyclubprague",
+            "sasazuprague", "karlovylazne", "duplexprague", "meetfactory",
+            "chapeau_rouge_prague", "epic_prague",
         ],
-        "ra_area_id": 178,
-        "ra_slug": "prague",
+        "subreddits": ["prague", "czech"],
         "known_venues": [
-            "Cross Club", "Roxy", "SaSaZu", "Karlovy Lazne", "Duplex",
-            "Lucerna Music Bar", "Chapeau Rouge", "Ankali", "Fuchs2",
-            "Storm Club", "Meet Factory", "Palac Akropolis",
+            "Cross Club", "Ankali", "Fuchs2", "Roxy", "SaSaZu",
+            "Karlovy Lazne", "Duplex", "MeetFactory", "Chapeau Rouge",
         ],
-        "meetup_topics": ["social", "expats", "language", "tech", "hiking"],
-        "twitter_accounts": ["@Prague_CZ", "@PragueEvents"],
-        "local_event_sites": [
-            "https://www.timeout.com/prague/things-to-do",
-            "https://goout.net/en/prague/events/",
-        ],
-        "dice_city_slug": "prague",
-        "fetlife_location": "Prague, Czech Republic",
     },
     "barcelona": {
-        "subreddits": ["barcelona", "spain", "barcelonaexpats"],
-        "instagram_hashtags": [
-            "barcelonaevents", "barcelonanightlife", "barcelonaparty",
-            "barcelonanight", "barcelonaclub", "barcelonalife", "barcelonafood",
-            "barcelonabeach", "barcelonatonight", "barcelonatechno",
-            "ravalbarcelona", "barcelonaunderground", "raboreal",
+        "instagram_seeds": [
+            "razzmatazzclubs", "salaapolob", "maborercelona_club", "pachabcn",
+            "nitsaclub", "inputhighfidelity", "lautbarcelona", "macarenaclub",
+            "laterrrazza", "elrowofficial",
         ],
-        "ra_area_id": 44,
-        "ra_slug": "barcelona",
+        "subreddits": ["barcelona"],
         "known_venues": [
-            "Razzmatazz", "Moog", "Sala Apolo", "Pacha Barcelona",
-            "Nitsa Club", "Input", "Laut", "Macarena Club",
-            "La Terrrazza", "Red58", "Upload", "City Hall",
+            "Razzmatazz", "Sala Apolo", "Moog", "Pacha Barcelona",
+            "Nitsa Club", "Input", "Laut", "Macarena Club", "La Terrrazza",
         ],
-        "meetup_topics": ["social", "expats", "language-exchange", "beach", "tech", "salsa"],
-        "twitter_accounts": ["@Barcelona_cat", "@bcaboreal"],
-        "local_event_sites": [
-            "https://www.timeout.com/barcelona/things-to-do",
-            "https://www.barcelonanavigator.com/events",
-        ],
-        "dice_city_slug": "barcelona",
-        "fetlife_location": "Barcelona, Spain",
     },
     "amsterdam": {
-        "subreddits": ["amsterdam", "netherlands", "amsterdamsocialclub"],
-        "instagram_hashtags": [
-            "amsterdamevents", "amsterdamnightlife", "amsterdamparty",
-            "amsterdamclub", "amsterdamlife", "amsterdamfood",
-            "amsterdamtonight", "amsterdamtechno", "amsterdamrave",
-            "amsterdamunderground", "deSchool", "shelteramsterdam",
+        "instagram_seeds": [
+            "deschoolamsterdam", "shelteramsterdam", "paradiso", "melkweg",
+            "airamsterdam", "thuishavenamsterdam", "radion_amsterdam",
+            "garagenoord", "dekering",
         ],
-        "ra_area_id": 29,
-        "ra_slug": "amsterdam",
+        "subreddits": ["amsterdam", "amsterdamsocialclub"],
         "known_venues": [
-            "De School", "Shelter", "Paradiso", "Melkweg",
-            "AIR Amsterdam", "Claire", "Marktkantine", "Thuishaven",
-            "Garage Noord", "Lofi", "Radion", "NDSM",
+            "De School", "Shelter", "Paradiso", "Melkweg", "AIR",
+            "Thuishaven", "Radion", "Garage Noord",
         ],
-        "meetup_topics": ["social", "expats", "tech", "startup", "cycling", "art"],
-        "twitter_accounts": ["@iaboredamsterdam", "@Amsterdam"],
-        "local_event_sites": [
-            "https://www.timeout.com/amsterdam/things-to-do",
-            "https://www.iamsterdam.com/en/see-and-do/whats-on",
-        ],
-        "dice_city_slug": "amsterdam",
-        "fetlife_location": "Amsterdam, Netherlands",
     },
     "lisbon": {
-        "subreddits": ["lisbon", "portugal", "lisbonexpats"],
-        "instagram_hashtags": [
-            "lisbonevents", "lisbonnightlife", "lisbonparty", "lisbonnight",
-            "lisbonclub", "lisbonlife", "lisbonfood", "lisbontonight",
-            "lisbontechno", "luxfragil", "lisbonunderground", "bairroalto",
+        "instagram_seeds": [
+            "luxfragil", "ministeriumclub", "musicboxlisboa",
+            "villagunderground_lx", "damaslisboa", "pensaoamor",
         ],
-        "ra_area_id": 110,
-        "ra_slug": "lisbon",
+        "subreddits": ["lisbon", "portugal"],
         "known_venues": [
-            "Lux Frágil", "Ministerium", "Village Underground",
-            "Music Box", "Titanic Sur Mer", "Pensão Amor",
-            "Damas", "Valsa", "Rive Rouge", "ZDB",
+            "Lux Frágil", "Ministerium", "Music Box", "Village Underground",
+            "Damas", "Pensão Amor",
         ],
-        "meetup_topics": ["social", "expats", "digital-nomad", "surf", "tech", "fado"],
-        "twitter_accounts": ["@visitlisboa"],
-        "local_event_sites": [
-            "https://www.timeout.com/lisbon/things-to-do",
-            "https://www.visitlisboa.com/en/events",
-        ],
-        "dice_city_slug": "lisbon",
-        "fetlife_location": "Lisbon, Portugal",
     },
     "vienna": {
-        "subreddits": ["vienna", "wien", "austria"],
-        "instagram_hashtags": [
-            "viennaevents", "viennanightlife", "viennaparty", "viennatonight",
-            "viennaclub", "viennafood", "viennaculture", "viennamusic",
-            "viennatechno", "grellforte", "pratersouna",
+        "instagram_seeds": [
+            "grelleforelle", "pratersauna", "flex_cafe", "fluc_vienna",
+            "daswerkvienna", "sassvienna", "celeste.vienna",
         ],
-        "ra_area_id": 169,
-        "ra_slug": "vienna",
+        "subreddits": ["vienna", "wien"],
         "known_venues": [
-            "Grelle Forelle", "Pratersauna", "Flex", "Fluc",
-            "Das Werk", "Sass", "Volksgarten", "Camera Club",
-            "Dual", "Celeste", "Horst",
+            "Grelle Forelle", "Pratersauna", "Flex", "Fluc", "Das Werk",
         ],
-        "meetup_topics": ["social", "expats", "classical-music", "tech", "hiking"],
-        "twitter_accounts": ["@Vienna_en"],
-        "local_event_sites": [
-            "https://www.timeout.com/vienna/things-to-do",
-            "https://events.wien.info/en/",
-        ],
-        "dice_city_slug": "vienna",
-        "fetlife_location": "Vienna, Austria",
     },
-    "warsaw": {
-        "subreddits": ["warsaw", "poland", "polska"],
-        "instagram_hashtags": [
-            "warsawevents", "warsawnightlife", "warsawparty", "warsawtonight",
-            "warsawclub", "warsawlife", "warsawfood", "warsawtechno",
-            "smolna", "jasnapolar", "warsawunderground",
+    "london": {
+        "instagram_seeds": [
+            "fabriclondon", "printworksldn", "thedrumsheds", "e1london",
+            "egg_ldn", "xoyo_london", "corsicastudios", "villageunderground",
+            "nighttalesldn", "thejaguar.ldn",
         ],
-        "ra_area_id": 170,
-        "ra_slug": "warsaw",
+        "subreddits": ["london", "londonsocialclub"],
         "known_venues": [
-            "Smolna", "Jasna 1", "Pogłos", "Luzztro",
-            "Prozak 2.0", "Klubokawiarnia", "Hydrozagadka", "1500m2",
+            "Fabric", "Printworks", "Drumsheds", "E1", "EGG",
+            "XOYO", "Corsica Studios", "Village Underground",
         ],
-        "meetup_topics": ["social", "expats", "tech", "startup", "language"],
-        "twitter_accounts": ["@Warsaw"],
-        "local_event_sites": [
-            "https://www.timeout.com/warsaw",
-            "https://warsawlocal.com/events",
-        ],
-        "dice_city_slug": "warsaw",
-        "fetlife_location": "Warsaw, Poland",
-    },
-    "krakow": {
-        "subreddits": ["krakow", "poland"],
-        "instagram_hashtags": [
-            "krakowevents", "krakownightlife", "krakowparty",
-            "krakowclub", "krakowlife", "krakowfood", "krakowtonight",
-        ],
-        "ra_area_id": 171,
-        "ra_slug": "krakow",
-        "known_venues": [
-            "Prozak", "Szpitalna 1", "Frantic", "Forum Przestrzenie",
-            "Bunkier Sztuki", "Klub re", "Hive",
-        ],
-        "meetup_topics": ["social", "expats", "language", "hiking"],
-        "twitter_accounts": [],
-        "local_event_sites": [
-            "https://www.timeout.com/krakow",
-        ],
-        "dice_city_slug": "krakow",
-        "fetlife_location": "Krakow, Poland",
-    },
-    "belgrade": {
-        "subreddits": ["belgrade", "serbia"],
-        "instagram_hashtags": [
-            "belgradeevents", "belgradenightlife", "belgraduparty",
-            "belgradeclub", "belgradelife", "belgradefood", "belgradetonight",
-            "belgradeunderground", "drugstore_belgrade", "belgradesplavovi",
-        ],
-        "ra_area_id": 183,
-        "ra_slug": "belgrade",
-        "known_venues": [
-            "Drugstore", "20/44", "Klub Mladih", "Hangar",
-            "Splavovi (river clubs)", "Lasta", "Brankow", "Tube",
-            "KC Grad", "Mikser House",
-        ],
-        "meetup_topics": ["social", "expats", "nightlife", "tech"],
-        "twitter_accounts": [],
-        "local_event_sites": [],
-        "dice_city_slug": "belgrade",
-        "fetlife_location": "Belgrade, Serbia",
     },
 }
 
-# Default research data for cities not in the pre-researched list
-DEFAULT_RESEARCH = {
-    "subreddits": [],
-    "instagram_hashtags": [],
-    "ra_area_id": None,
-    "ra_slug": None,
-    "known_venues": [],
-    "meetup_topics": ["social", "expats", "nightlife"],
-    "twitter_accounts": [],
-    "local_event_sites": [],
-    "dice_city_slug": None,
-    "fetlife_location": None,
+# Google search queries to discover Instagram accounts for a city
+DISCOVERY_QUERIES = [
+    "{city} nightclub instagram",
+    "{city} club promoter instagram",
+    "{city} techno events instagram",
+    "{city} nightlife instagram pages to follow",
+    "best {city} party instagram accounts",
+    "{city} underground events instagram",
+    "{city} kink fetish events instagram",
+    "{city} bar crawl pub events instagram",
+    "{city} live music venue instagram",
+    "{city} social events meetup instagram",
+    "{city} expat community instagram",
+    "{city} food market events instagram",
+    "{city} art gallery events instagram",
+    "{city} queer lgbtq events instagram",
+]
+
+# Accounts to always exclude (generic/irrelevant)
+EXCLUDED_ACCOUNTS = {
+    "p", "explore", "reel", "stories", "accounts", "about", "developer",
+    "instagram", "popular", "tags", "locations", "tv", "reels",
 }
 
 
 class ResearcherAgent(BaseAgent):
-    """Discovers relevant sources, accounts, hashtags, and search terms for a city.
+    """Discovers relevant Instagram accounts, venues, and sources for a city.
 
-    This agent acts as the intelligence gatherer - it figures out WHERE to look
-    for events in a given city. It provides city-specific context that the
-    Crawler Agent uses to know which subreddits, hashtags, venues, and local
-    sites to search.
+    Uses a two-phase approach:
+    1. Seed data: pre-researched accounts for major cities
+    2. Discovery: SearchAPI Google to find MORE accounts automatically
     """
 
     role = AgentRole.RESEARCHER
@@ -274,96 +157,147 @@ class ResearcherAgent(BaseAgent):
         city = context["city"].lower().strip()
         date = context["date"]
         vibes = context.get("vibes", [])
+        api_key = context.get("searchapi_key", "")
 
         logger.info(f"Researching sources for {city} on {date}")
 
-        # Look up pre-researched data or build dynamic research
-        research = dict(CITY_RESEARCH_DATA.get(city, DEFAULT_RESEARCH))
+        # Start with seed data
+        seed = dict(CITY_SEED_DATA.get(city, {}))
+        instagram_accounts = set(seed.get("instagram_seeds", []))
+        subreddits = seed.get("subreddits", [city.replace(" ", ""), "solotravel"])
+        known_venues = seed.get("known_venues", [])
 
-        # Dynamically generate city-specific hashtags if not pre-researched
-        if not research["instagram_hashtags"]:
-            city_tag = city.replace(" ", "").replace("-", "")
-            research["instagram_hashtags"] = [
-                f"{city_tag}events", f"{city_tag}nightlife", f"{city_tag}party",
-                f"{city_tag}tonight", f"{city_tag}club", f"{city_tag}life",
-                f"{city_tag}food", f"{city_tag}music", f"{city_tag}culture",
-            ]
+        # Phase 2: Auto-discover more Instagram accounts via Google
+        if api_key:
+            discovered = await self._discover_instagram_accounts(city, api_key, vibes)
+            instagram_accounts.update(discovered)
+            logger.info(f"  Discovered {len(discovered)} new accounts, total: {len(instagram_accounts)}")
 
-        if not research["subreddits"]:
-            research["subreddits"] = [city.replace(" ", ""), "solotravel", "travel"]
+        # Also discover accounts from venue names
+        if api_key and known_venues:
+            venue_accounts = await self._discover_venue_accounts(known_venues, city, api_key)
+            instagram_accounts.update(venue_accounts)
 
-        if not research["dice_city_slug"]:
-            research["dice_city_slug"] = city.replace(" ", "-")
+        # Generate hashtags
+        city_tag = city.replace(" ", "").replace("-", "")
+        instagram_hashtags = [
+            f"{city_tag}events", f"{city_tag}nightlife", f"{city_tag}party",
+            f"{city_tag}tonight", f"{city_tag}club", f"{city_tag}techno",
+            f"{city_tag}rave", f"{city_tag}music", f"{city_tag}culture",
+        ]
 
-        if not research["fetlife_location"]:
-            country = context.get("country", "")
-            research["fetlife_location"] = f"{city.title()}, {country}"
+        # Add vibe-specific hashtags
+        for vibe in vibes:
+            vibe_name = vibe.value if hasattr(vibe, "value") else str(vibe)
+            instagram_hashtags.append(f"{city_tag}{vibe_name.replace('_', '')}")
 
-        if not research["ra_slug"]:
-            research["ra_slug"] = city.replace(" ", "-")
-
-        # Add vibe-specific search terms
-        vibe_search_terms = self._generate_vibe_searches(city, date, vibes)
-        research["vibe_search_terms"] = vibe_search_terms
-
-        # Generate platform-specific search queries
-        research["google_queries"] = self._build_google_queries(city, date, vibes)
-        research["twitter_queries"] = self._build_twitter_queries(city, date)
+        research = {
+            "instagram_accounts": sorted(instagram_accounts),
+            "instagram_hashtags": instagram_hashtags,
+            "subreddits": subreddits,
+            "known_venues": known_venues,
+            "google_queries": self._build_google_queries(city, date, vibes),
+        }
 
         return AgentResult(
             agent=self.role,
             success=True,
             data=research,
-            metadata={"city": city, "date": date, "vibes_requested": [v.value if hasattr(v, 'value') else v for v in vibes]},
+            metadata={
+                "city": city,
+                "date": date,
+                "instagram_accounts_count": len(instagram_accounts),
+                "discovery_method": "seed+google" if api_key else "seed_only",
+            },
         )
 
-    def _generate_vibe_searches(self, city: str, date: str, vibes: list) -> dict[str, list[str]]:
-        """Generate vibe-specific search terms."""
-        vibe_terms = {
-            "SOCIAL": ["meetup", "social gathering", "hangout", "game night", "trivia", "language exchange"],
-            "DATING": ["speed dating", "singles mixer", "singles night", "dating event"],
-            "KINKY": ["kink party", "munch", "play party", "fetish night", "bdsm", "shibari workshop"],
-            "NIGHTLIFE": ["club night", "dj set", "techno party", "rave", "afterparty", "bar crawl"],
-            "MUSIC": ["live music", "concert", "gig", "jazz night", "open mic"],
-            "ART_CULTURE": ["exhibition opening", "gallery night", "theater", "film screening", "poetry"],
-            "FOOD_DRINK": ["food market", "wine tasting", "supper club", "street food", "cocktail"],
-            "WELLNESS": ["yoga", "meditation", "sound bath", "ecstatic dance", "breathwork"],
-            "ADVENTURE": ["walking tour", "bike tour", "day trip", "hiking", "escape room"],
-            "NETWORKING": ["startup meetup", "tech event", "hackathon", "networking"],
-            "LGBTQ": ["pride", "queer party", "drag show", "lgbtq event"],
-            "UNDERGROUND": ["underground party", "popup", "warehouse", "secret event"],
-            "FESTIVAL": ["festival", "street party", "carnival", "market"],
-            "SPORT_FITNESS": ["run club", "yoga class", "sports event", "fitness"],
-        }
-        result = {}
-        for vibe_name, terms in vibe_terms.items():
-            result[vibe_name] = [f"{city} {term}" for term in terms]
-        return result
+    async def _discover_instagram_accounts(self, city: str, api_key: str, vibes: list) -> set[str]:
+        """Use SearchAPI Google to find Instagram accounts for this city."""
+        accounts = set()
 
-    def _build_google_queries(self, city: str, date: str, vibes: list) -> list[str]:
-        """Build targeted Google search queries."""
-        base_queries = [
+        # Select queries based on vibes
+        queries = [q.format(city=city) for q in DISCOVERY_QUERIES]
+
+        # Add vibe-specific queries
+        for vibe in vibes:
+            vibe_name = vibe.value if hasattr(vibe, "value") else str(vibe)
+            queries.append(f"{city} {vibe_name.replace('_', ' ')} events instagram")
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            for query in queries[:8]:  # Limit to 8 queries to conserve API credits
+                try:
+                    resp = await client.get(
+                        "https://www.searchapi.io/api/v1/search",
+                        params={"engine": "google", "q": query, "hl": "en", "num": 10, "api_key": api_key},
+                    )
+                    if resp.status_code != 200:
+                        continue
+                    data = resp.json()
+
+                    for item in data.get("organic_results", []):
+                        link = item.get("link", "")
+                        snippet = item.get("snippet", "")
+                        title = item.get("title", "")
+                        text = f"{link} {snippet} {title}"
+
+                        # Extract from instagram.com URLs
+                        for match in re.findall(r"instagram\.com/([a-zA-Z0-9_.]{3,30})", text):
+                            handle = match.lower().rstrip("./")
+                            if handle not in EXCLUDED_ACCOUNTS:
+                                accounts.add(handle)
+
+                        # Extract @mentions
+                        for match in re.findall(r"@([a-zA-Z0-9_.]{3,30})", text):
+                            handle = match.lower()
+                            if handle not in EXCLUDED_ACCOUNTS and not any(
+                                x in handle for x in ("gmail", "email", "yahoo", "hotmail", "outlook")
+                            ):
+                                accounts.add(handle)
+
+                except Exception as e:
+                    logger.warning(f"Discovery query failed: {e}")
+
+        return accounts
+
+    async def _discover_venue_accounts(self, venues: list[str], city: str, api_key: str) -> set[str]:
+        """Find Instagram accounts for known venues."""
+        accounts = set()
+        async with httpx.AsyncClient(timeout=15) as client:
+            for venue in venues[:10]:  # Top 10 venues
+                try:
+                    resp = await client.get(
+                        "https://www.searchapi.io/api/v1/search",
+                        params={
+                            "engine": "google",
+                            "q": f"{venue} {city} instagram",
+                            "hl": "en", "num": 5, "api_key": api_key,
+                        },
+                    )
+                    if resp.status_code != 200:
+                        continue
+                    data = resp.json()
+
+                    for item in data.get("organic_results", []):
+                        link = item.get("link", "")
+                        for match in re.findall(r"instagram\.com/([a-zA-Z0-9_.]{3,30})", link):
+                            handle = match.lower().rstrip("./")
+                            if handle not in EXCLUDED_ACCOUNTS:
+                                accounts.add(handle)
+
+                except Exception as e:
+                    logger.warning(f"Venue discovery failed for {venue}: {e}")
+
+        return accounts
+
+    def _build_google_queries(self, city, date, vibes):
+        queries = [
             f"{city} events {date}",
             f"{city} things to do {date}",
             f"{city} nightlife {date}",
             f"{city} parties this week",
             f"what's on in {city} {date}",
-            f"{city} event calendar",
-            f"{city} club night {date}",
-            f"{city} live events today",
         ]
         for vibe in vibes:
-            vibe_name = vibe.value if hasattr(vibe, 'value') else vibe
-            base_queries.append(f"{city} {vibe_name.lower().replace('_', ' ')} events {date}")
-        return base_queries
-
-    def _build_twitter_queries(self, city: str, date: str) -> list[str]:
-        """Build targeted Twitter/X search queries."""
-        return [
-            f"{city} event tonight",
-            f"{city} party tonight",
-            f"#{city.replace(' ', '')}events",
-            f"#{city.replace(' ', '')}nightlife",
-            f"things to do {city}",
-            f"{city} club tonight",
-        ]
+            vibe_name = vibe.value if hasattr(vibe, "value") else vibe
+            queries.append(f"{city} {vibe_name.lower().replace('_', ' ')} events {date}")
+        return queries

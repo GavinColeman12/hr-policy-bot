@@ -199,6 +199,36 @@ async def search_events(request: SearchRequest) -> SearchResponse:
 
     sources_searched = list(sources_to_search.keys())
 
+    # 2.5. Run Researcher Agent to discover Instagram accounts
+    research_data = {}
+    try:
+        from .agents.researcher import ResearcherAgent
+        researcher = ResearcherAgent()
+        research_result = await researcher.safe_execute({
+            "city": city_name,
+            "date": request.date,
+            "vibes": request.vibes or [],
+            "searchapi_key": _settings.SERPAPI_KEY,
+        })
+        if research_result.success and research_result.data:
+            research_data = research_result.data
+            logger.info(
+                "Researcher found %d Instagram accounts for %s",
+                len(research_data.get("instagram_accounts", [])),
+                city_name,
+            )
+    except Exception as exc:
+        logger.warning("Researcher agent failed: %s", exc)
+
+    # Inject research context into crawlers that support it
+    for crawler in sources_to_search.values():
+        if hasattr(crawler, "set_research_context"):
+            crawler.set_research_context({
+                "research": research_data,
+                "city": city_name,
+                "date": request.date,
+            })
+
     # 3. Launch all crawlers concurrently
     tasks = [
         _run_crawler(

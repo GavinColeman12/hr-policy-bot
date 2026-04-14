@@ -29,6 +29,7 @@ class GoogleEventsCrawler(BaseCrawler):
     name = "Google Events"
 
     async def crawl(self, city, date, lat, lon, radius_km, vibes=None, **kw):
+        import asyncio
         settings = get_settings()
         if not settings.SERPAPI_KEY:
             self._log_warning("SERPAPI_KEY (SearchAPI.io) not configured — skipping")
@@ -37,24 +38,19 @@ class GoogleEventsCrawler(BaseCrawler):
         events = []
         seen = set()
 
-        # 1. Google Events engine
-        events.extend(await self._google_events_engine(city, date, settings.SERPAPI_KEY, seen))
-
-        # 2. Regular Google search queries
-        for tpl in _SEARCH_TEMPLATES:
-            events.extend(await self._google_search(
+        # Run all searches in parallel (events engine + query-based)
+        tasks = [
+            self._google_events_engine(city, date, settings.SERPAPI_KEY, seen),
+        ]
+        for tpl in _SEARCH_TEMPLATES[:3]:  # Reduced from 5 to 3 most effective
+            tasks.append(self._google_search(
                 tpl.format(city=city, date=date), settings.SERPAPI_KEY, city, date, seen
             ))
 
-        # 3. Site-specific searches to find events on major platforms
-        site_queries = [
-            f"site:ra.co events {city}",
-            f"site:dice.fm {city}",
-            f"site:eventbrite.com {city} events",
-            f"site:meetup.com {city} events",
-        ]
-        for q in site_queries:
-            events.extend(await self._google_search(q, settings.SERPAPI_KEY, city, date, seen))
+        results_lists = await asyncio.gather(*tasks, return_exceptions=True)
+        for r in results_lists:
+            if isinstance(r, list):
+                events.extend(r)
 
         self._log_info("Total: %d events for %s", len(events), city)
         return self._filter_by_vibes(events, vibes)

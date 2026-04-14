@@ -27,23 +27,24 @@ class FetLifeCrawler(BaseCrawler):
             self._log_warning("SearchAPI key not configured — skipping FetLife")
             return []
 
+        import asyncio
         events, seen = [], set()
 
         # FetLife has public event pages indexed by Google
         queries = [
-            f"site:fetlife.com {city} event",
-            f"site:fetlife.com {city} munch",
+            f"site:fetlife.com {city} event munch",
             f"site:fetlife.com {city} play party",
-            f"site:fetlife.com {city} workshop",
-            f"site:fetlife.com {city} kink event",
-            f"site:fetlife.com {city} fetish",
+            f"site:fetlife.com {city} workshop kink",
         ]
 
-        for q in queries:
-            resp = await self._get(
+        async def run_query(q):
+            return await self._get(
                 "https://www.searchapi.io/api/v1/search",
                 params={"engine": "google", "q": q, "hl": "en", "num": 10, "api_key": settings.SERPAPI_KEY},
             )
+
+        responses = await asyncio.gather(*[run_query(q) for q in queries])
+        for resp in responses:
             if not resp:
                 continue
             try:

@@ -24,89 +24,41 @@ class EventGuidesCrawler(BaseCrawler):
     source = EventSource.GUIDES
     name = "Event Guides"
 
-    # Comprehensive free event guide sites
+    # High-signal free event sites - prioritized by usefulness
+    # Only the best ones kept to make searches fast (<30s)
     TARGET_SITES = [
-        # Music & concerts
+        # Top priority - general event aggregators
         ("songkick.com", ["MUSIC"]),
         ("bandsintown.com", ["MUSIC"]),
-        ("setlist.fm", ["MUSIC"]),
-        ("jambase.com", ["MUSIC"]),
-        ("concertful.com", ["MUSIC"]),
-        ("beatport.com", ["MUSIC", "NIGHTLIFE"]),
-        ("mixmag.net", ["MUSIC", "NIGHTLIFE"]),
-
-        # Nightlife & clubs
+        ("allevents.in", ["SOCIAL"]),
         ("xceed.me", ["NIGHTLIFE", "MUSIC"]),
-        ("clubberia.com", ["NIGHTLIFE", "MUSIC"]),
+        ("timeout.com", ["SOCIAL", "ART_CULTURE", "FOOD_DRINK"]),
 
         # Festivals
         ("festicket.com", ["FESTIVAL", "MUSIC"]),
-        ("festivalinsights.com", ["FESTIVAL"]),
 
-        # General event aggregators
-        ("allevents.in", ["SOCIAL"]),
-        ("evensi.com", ["SOCIAL"]),
-        ("10times.com", ["NETWORKING", "SOCIAL"]),
-        ("eventful.com", ["SOCIAL"]),
+        # Alternative / kinky / dating
+        ("skirtclub.com", ["KINKY", "DATING"]),
 
-        # Local event guides (TimeOut network)
-        ("timeout.com", ["SOCIAL", "ART_CULTURE", "FOOD_DRINK"]),
-
-        # Tourism / city sites
-        ("visitlondon.com", ["ART_CULTURE"]),
-        ("visitberlin.de", ["SOCIAL"]),
-        ("visitlisboa.com", ["SOCIAL"]),
-        ("iamsterdam.com", ["SOCIAL"]),
-        ("visitcopenhagen.com", ["SOCIAL"]),
-        ("visitdublin.com", ["SOCIAL"]),
-        ("visitoslo.com", ["SOCIAL"]),
-        ("myhelsinki.fi", ["SOCIAL"]),
-        ("visitstockholm.com", ["SOCIAL"]),
-        ("visit.brussels", ["SOCIAL"]),
-        ("turismoroma.it", ["ART_CULTURE"]),
-
-        # Local city blogs
-        ("expats.cz", ["SOCIAL"]),
-        ("welovebudapest.com", ["SOCIAL", "ART_CULTURE"]),
-        ("funzine.hu", ["SOCIAL"]),
-        ("exberliner.com", ["ART_CULTURE"]),
-        ("goout.net", ["MUSIC", "NIGHTLIFE", "ART_CULTURE"]),
-        ("lovekrakow.pl", ["SOCIAL"]),
-        ("belgradenight.com", ["NIGHTLIFE"]),
-        ("thisisathens.org", ["SOCIAL"]),
-        ("falter.at", ["ART_CULTURE", "SOCIAL"]),
-
-        # Food & drink
+        # Vibe-specific
         ("eater.com", ["FOOD_DRINK"]),
-        ("infatuation.com", ["FOOD_DRINK"]),
-
-        # LGBTQ+
-        ("queerty.com", ["LGBTQ"]),
         ("them.us", ["LGBTQ"]),
-
-        # Wellness
-        ("mindbodyonline.com", ["WELLNESS"]),
         ("classpass.com", ["WELLNESS", "SPORT_FITNESS"]),
 
-        # Kinky / Alternative
-        ("skirtclub.com", ["KINKY", "DATING", "LGBTQ"]),
-        ("kinkyevents.com", ["KINKY"]),
-
-        # Dating / Singles
-        ("thesinglesevents.com", ["DATING"]),
-
-        # Tech / Networking
-        ("eventil.com", ["NETWORKING"]),
-        ("techmeme.com/events", ["NETWORKING"]),
+        # City-specific (loaded dynamically based on city)
+        ("goout.net", ["MUSIC", "NIGHTLIFE", "ART_CULTURE"]),
+        ("welovebudapest.com", ["SOCIAL", "ART_CULTURE"]),
+        ("exberliner.com", ["ART_CULTURE"]),
+        ("expats.cz", ["SOCIAL"]),
     ]
 
     async def crawl(self, city, date, lat, lon, radius_km, vibes=None, **kw):
+        import asyncio
         settings = get_settings()
         if not settings.SERPAPI_KEY:
             self._log_warning("SERPAPI_KEY not configured — skipping event guides")
             return []
 
-        events = []
         seen = set()
 
         # Filter sites by requested vibes to conserve API calls
@@ -125,44 +77,45 @@ class EventGuidesCrawler(BaseCrawler):
 
         self._log_info("Searching %d event guide sites for %s", len(target_sites), city)
 
-        for site, default_vibes in target_sites:
-            try:
-                results = await self._search_site(site, city, date, default_vibes, settings.SERPAPI_KEY, seen)
-                events.extend(results)
-            except Exception as e:
-                self._log_warning("Site %s failed: %s", site, e)
-                continue
+        # Run all site searches concurrently with a semaphore to avoid overload
+        semaphore = asyncio.Semaphore(8)
+
+        async def bounded_search(site, defaults):
+            async with semaphore:
+                try:
+                    return await self._search_site(site, city, date, defaults, settings.SERPAPI_KEY, seen)
+                except Exception as e:
+                    self._log_warning("Site %s failed: %s", site, e)
+                    return []
+
+        tasks = [bounded_search(site, defaults) for site, defaults in target_sites]
+        results_lists = await asyncio.gather(*tasks, return_exceptions=False)
+
+        events = []
+        for site_events in results_lists:
+            events.extend(site_events)
 
         self._log_info("Found %d events from event guides for %s", len(events), city)
         return self._filter_by_vibes(events, vibes)
 
     async def _search_site(self, site, city, date, default_vibes, api_key, seen):
         """Use SearchAPI to find events on a specific guide site."""
-        from datetime import datetime
-        try:
-            month_year = datetime.strptime(date, "%Y-%m-%d").strftime("%B %Y")
-        except Exception:
-            month_year = ""
+        # Single query per site to keep searches fast
+        query = f"site:{site} {city} events"
 
-        queries = [
-            f"site:{site} {city} events",
-            f"site:{site} {city} {month_year}" if month_year else f"site:{site} {city}",
-        ]
+        resp = await self._get(
+            "https://www.searchapi.io/api/v1/search",
+            params={"engine": "google", "q": query, "hl": "en", "num": 10, "api_key": api_key},
+        )
+        if not resp:
+            return []
+        try:
+            data = resp.json()
+        except Exception:
+            return []
 
         results = []
-        for q in queries:
-            resp = await self._get(
-                "https://www.searchapi.io/api/v1/search",
-                params={"engine": "google", "q": q, "hl": "en", "num": 10, "api_key": api_key},
-            )
-            if not resp:
-                continue
-            try:
-                data = resp.json()
-            except Exception:
-                continue
-
-            for item in data.get("organic_results", []):
+        for item in data.get("organic_results", []):
                 title = item.get("title", "")
                 link = item.get("link", "")
 

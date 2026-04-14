@@ -2,7 +2,7 @@ import axios from 'axios';
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 60000,
+  timeout: 300000,  // 5 minutes - comprehensive searches can take 2-3 minutes
   headers: {
     'Content-Type': 'application/json',
   },

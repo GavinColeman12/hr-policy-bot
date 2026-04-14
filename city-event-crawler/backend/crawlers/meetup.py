@@ -23,24 +23,24 @@ class MeetupCrawler(BaseCrawler):
             self._log_warning("SearchAPI key not configured — skipping Meetup")
             return []
 
+        import asyncio
         events, seen = [], set()
 
         queries = [
             f"site:meetup.com {city} events",
-            f"site:meetup.com {city} group",
-            f"site:meetup.com {city} social",
-            f"site:meetup.com {city} language exchange",
-            f"site:meetup.com {city} expat",
+            f"site:meetup.com {city} social expat",
             f"site:meetup.com {city} tech startup",
-            f"site:meetup.com {city} wellness yoga",
-            f"site:meetup.com {city} hiking outdoor",
+            f"site:meetup.com {city} wellness yoga hiking",
         ]
 
-        for q in queries:
-            resp = await self._get(
+        async def run_query(q):
+            return await self._get(
                 "https://www.searchapi.io/api/v1/search",
                 params={"engine": "google", "q": q, "hl": "en", "num": 10, "api_key": settings.SERPAPI_KEY},
             )
+
+        responses = await asyncio.gather(*[run_query(q) for q in queries])
+        for resp in responses:
             if not resp:
                 continue
             try:

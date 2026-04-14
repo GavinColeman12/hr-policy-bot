@@ -1,8 +1,14 @@
-"""FetLife events crawler."""
+"""FetLife crawler - uses SearchAPI Google to find public FetLife event pages.
+
+FetLife requires login for direct access, but many event pages are indexed
+by Google and can be discovered via site: search.
+"""
 
 from __future__ import annotations
 
 import logging
+import re
+
 from ..config import get_settings
 from ..models import Event, EventSource, EventVibe
 from ..utils.helpers import clean_text, generate_event_id, parse_date
@@ -10,103 +16,88 @@ from .base import BaseCrawler
 
 logger = logging.getLogger(__name__)
 
-CITY_FETLIFE_LOCATIONS = {
-    "budapest": "Budapest, Hungary", "berlin": "Berlin, Germany",
-    "prague": "Prague, Czech Republic", "barcelona": "Barcelona, Spain",
-    "amsterdam": "Amsterdam, Netherlands", "lisbon": "Lisbon, Portugal",
-    "vienna": "Vienna, Austria", "warsaw": "Warsaw, Poland",
-    "london": "London, United Kingdom", "paris": "Paris, France",
-    "rome": "Rome, Italy", "munich": "Munich, Germany",
-    "dublin": "Dublin, Ireland", "copenhagen": "Copenhagen, Denmark",
-}
-
 
 class FetLifeCrawler(BaseCrawler):
-    """Crawls FetLife for kink/fetish events.
-
-    Note: FetLife requires authentication. Set FETLIFE_SESSION_COOKIE env var
-    with a valid _fl_sessionid cookie value, or this crawler returns empty.
-    """
-
     source = EventSource.FETLIFE
     name = "FetLife"
 
     async def crawl(self, city, date, lat, lon, radius_km, vibes=None, **kw):
-        city_lower = city.lower().strip()
-        location = CITY_FETLIFE_LOCATIONS.get(city_lower, f"{city.title()}")
+        settings = get_settings()
+        if not settings.SERPAPI_KEY:
+            self._log_warning("SearchAPI key not configured — skipping FetLife")
+            return []
 
-        events = []
-        seen = set()
+        events, seen = [], set()
 
-        # Search FetLife events page
-        search_results = await self._search_events(location, city, date, seen)
-        events.extend(search_results)
+        # FetLife has public event pages indexed by Google
+        queries = [
+            f"site:fetlife.com {city} event",
+            f"site:fetlife.com {city} munch",
+            f"site:fetlife.com {city} play party",
+            f"site:fetlife.com {city} workshop",
+            f"site:fetlife.com {city} kink event",
+            f"site:fetlife.com {city} fetish",
+        ]
 
-        # Auto-tag all FetLife events as KINKY
-        for ev in events:
-            if EventVibe.KINKY not in ev.vibes:
-                ev.vibes.insert(0, EventVibe.KINKY)
+        for q in queries:
+            resp = await self._get(
+                "https://www.searchapi.io/api/v1/search",
+                params={"engine": "google", "q": q, "hl": "en", "num": 10, "api_key": settings.SERPAPI_KEY},
+            )
+            if not resp:
+                continue
+            try:
+                data = resp.json()
+            except Exception:
+                continue
+
+            for item in data.get("organic_results", []):
+                title = item.get("title", "")
+                link = item.get("link", "")
+                if "fetlife.com" not in link:
+                    continue
+
+                eid = generate_event_id(self.source.value, title, link)
+                if eid in seen:
+                    continue
+                seen.add(eid)
+
+                desc = clean_text(item.get("snippet"))
+                clean_title = re.split(r"\s*[|·]\s*", title)[0].strip()
+
+                # Extract RSVP count
+                rsvp_count = None
+                if desc:
+                    rsvp_match = re.search(r"(\d+)\s*(rsvp|going|attend)", desc, re.IGNORECASE)
+                    if rsvp_match:
+                        try:
+                            rsvp_count = int(rsvp_match.group(1))
+                        except ValueError:
+                            pass
+
+                # Extract venue from title/snippet (often "Event at Venue, City")
+                venue = None
+                if " at " in clean_title:
+                    venue = clean_title.split(" at ")[-1].split(",")[0].strip()
+
+                # All FetLife events auto-tag as KINKY
+                results_vibes = self.classify_vibes(title, desc)
+                if EventVibe.KINKY not in results_vibes:
+                    results_vibes.insert(0, EventVibe.KINKY)
+
+                events.append(Event(
+                    id=eid,
+                    title=clean_title[:200],
+                    description=desc,
+                    date=parse_date(date),
+                    source=self.source,
+                    source_url=link,
+                    venue_name=venue,
+                    attendee_count=rsvp_count,
+                    vibes=results_vibes,
+                    tags=["kink", "fetish", "fetlife"],
+                    raw_data=item,
+                ))
 
         self._log_info("Found %d events from FetLife for %s", len(events), city)
         return self._filter_by_vibes(events, vibes)
-
-    async def _search_events(self, location, city, date, seen):
-        """Search FetLife events near a location."""
-        resp = await self._get(
-            "https://fetlife.com/events/search",
-            params={"q": location, "type": "events"},
-            headers={
-                "Accept": "text/html",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            },
-        )
-        if not resp:
-            return []
-
-        try:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(resp.text, "html.parser")
-        except ImportError:
-            self._log_warning("beautifulsoup4 not installed, skipping FetLife scrape")
-            return []
-
-        results = []
-        for card in soup.select(".event_listing, .event-card, [class*='EventCard']"):
-            title_el = card.select_one("h3 a, .event-title a, [class*='title'] a")
-            if not title_el:
-                continue
-
-            title = title_el.get_text(strip=True)
-            link = title_el.get("href", "")
-            eid = generate_event_id(self.source.value, title, city, date)
-            if eid in seen:
-                continue
-            seen.add(eid)
-
-            desc_el = card.select_one(".event-description, p")
-            desc = clean_text(desc_el.get_text(strip=True)) if desc_el else None
-
-            venue_el = card.select_one(".event-location, .location")
-            venue = venue_el.get_text(strip=True) if venue_el else None
-
-            rsvp_el = card.select_one(".rsvp-count, .attending-count, [class*='rsvp']")
-            rsvp_count = None
-            if rsvp_el:
-                import re
-                nums = re.findall(r'\d+', rsvp_el.get_text())
-                rsvp_count = int(nums[0]) if nums else None
-
-            source_url = f"https://fetlife.com{link}" if link.startswith("/") else (link or "https://fetlife.com/events")
-
-            results.append(Event(
-                id=eid, title=title, description=desc,
-                date=parse_date(date),
-                source=self.source, source_url=source_url,
-                venue_name=venue,
-                attendee_count=rsvp_count,
-                vibes=self.classify_vibes(title, desc),
-                tags=["kink", "fetish"],
-                raw_data={"scraped": True},
-            ))
-
-        return results

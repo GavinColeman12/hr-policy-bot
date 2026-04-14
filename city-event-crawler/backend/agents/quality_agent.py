@@ -5,6 +5,7 @@ import logging
 import re
 from difflib import SequenceMatcher
 from datetime import datetime
+from typing import Any
 
 from .base_agent import BaseAgent, AgentRole, AgentResult
 

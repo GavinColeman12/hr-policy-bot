@@ -2,6 +2,7 @@
 
 import logging
 import re
+from typing import Any
 from .base_agent import BaseAgent, AgentRole, AgentResult
 
 logger = logging.getLogger(__name__)

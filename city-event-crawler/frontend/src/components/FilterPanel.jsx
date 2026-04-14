@@ -12,8 +12,8 @@ const SOURCE_LABELS = {
   google: 'Google', eventbrite: 'Eventbrite', meetup: 'Meetup',
   instagram: 'Instagram', reddit: 'Reddit', twitter: 'X / Twitter',
   facebook: 'Facebook', resident_advisor: 'Resident Advisor',
-  fetlife: 'FetLife', ticketmaster: 'Ticketmaster', yelp: 'Yelp',
-  dice: 'Dice.fm', blog: 'Blogs',
+  fetlife: 'FetLife', ticketmaster: 'Ticketmaster',
+  dice: 'Dice.fm', blog: 'Blogs', guides: 'Event Guides',
 };
 
 export default function FilterPanel({

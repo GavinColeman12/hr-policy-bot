@@ -14,6 +14,7 @@ def get_all_crawlers() -> dict[EventSource, "BaseCrawler"]:
     """Instantiate and return one crawler per supported platform."""
     from .blog_scraper import BlogScraperCrawler
     from .dice import DiceCrawler
+    from .event_guides import EventGuidesCrawler
     from .eventbrite import EventbriteCrawler
     from .facebook import FacebookCrawler
     from .fetlife import FetLifeCrawler
@@ -37,6 +38,7 @@ def get_all_crawlers() -> dict[EventSource, "BaseCrawler"]:
         EventSource.TICKETMASTER: TicketmasterCrawler(),
         EventSource.DICE: DiceCrawler(),
         EventSource.BLOG: BlogScraperCrawler(),
+        EventSource.GUIDES: EventGuidesCrawler(),
     }
 
 

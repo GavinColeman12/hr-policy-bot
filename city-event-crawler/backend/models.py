@@ -55,6 +55,7 @@ class EventSource(str, Enum):
     YELP = "yelp"
     DICE = "dice"
     BLOG = "blog"
+    GUIDES = "guides"
     OTHER = "other"
 
 

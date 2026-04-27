@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import anthropic
@@ -50,6 +50,14 @@ that someone could attend. If yes, extract:
     play_party  — kink scene events: play parties, fetish nights, munches,
                   shibari workshops, kink-friendly social events
     other       — anything that doesn't fit the above
+- end_time: HH:MM 24h end / close time, or null. For overnight events,
+  use the closing hour (e.g. 06:00 if it goes till morning).
+- min_age: integer minimum age (18, 21, etc.) if explicitly stated, else null.
+- lineup: list of headliner names — DJs, bands, performers, in billing order if
+  apparent. Empty list if none mentioned. Strip "feat.", "presents", etc.
+- crowd_note: one short line (max 80 chars) describing who'd dig this. Examples:
+  "Techno-curious locals", "First-Friday gallery crowd", "Queer dancefloor regulars".
+  Null if you can't infer it confidently.
 - is_event: true if it's a real upcoming attendable event, false otherwise
 - confidence: 0.0-1.0 — how sure are you this is a real event with the data above
 
@@ -66,8 +74,12 @@ class _ExtractedEvent(BaseModel):
     description: str | None = None
     date_iso: str | None = None
     start_time: str | None = None
+    end_time: str | None = None
     venue_name: str | None = None
     vibes: list[str] = []
+    min_age: int | None = None
+    lineup: list[str] = []
+    crowd_note: str | None = None
 
 
 class _ExtractBatch(BaseModel):
@@ -125,6 +137,17 @@ def _to_event(parsed: _ExtractedEvent, item: dict[str, Any], reference_date: str
         except ValueError:
             return None
 
+    # End time: if it's earlier than start_time it means the event runs past
+    # midnight, so roll to the next day.
+    end_dt: datetime | None = None
+    if parsed.end_time:
+        try:
+            end_dt = datetime.fromisoformat(f"{raw_date}T{parsed.end_time.strip()}")
+            if end_dt <= dt:
+                end_dt = end_dt + timedelta(days=1)
+        except ValueError:
+            end_dt = None
+
     def _safe_int(v):
         try:
             n = int(v) if v is not None else None
@@ -154,11 +177,24 @@ def _to_event(parsed: _ExtractedEvent, item: dict[str, Any], reference_date: str
             if shortcode else f"https://www.instagram.com/{owner}/"
         )
 
+    # Strip + dedupe lineup, cap at 8 to avoid wall-of-names cards.
+    seen_artists: set[str] = set()
+    lineup: list[str] = []
+    for raw_name in parsed.lineup or []:
+        name = raw_name.strip()
+        key = name.lower()
+        if name and key not in seen_artists:
+            seen_artists.add(key)
+            lineup.append(name)
+        if len(lineup) >= 8:
+            break
+
     return Event(
         id=eid,
         title=parsed.title.strip()[:200],
         description=parsed.description,
         date=dt,
+        end_date=end_dt,
         source=EventSource.INSTAGRAM,
         source_url=source_url,
         venue_name=parsed.venue_name,
@@ -170,6 +206,9 @@ def _to_event(parsed: _ExtractedEvent, item: dict[str, Any], reference_date: str
         account_handle=owner or None,
         scrape_source=scrape_source,
         tags=[f"@{owner}"] if owner else [],
+        min_age=parsed.min_age,
+        lineup=lineup,
+        crowd_note=(parsed.crowd_note or "").strip()[:120] or None,
         raw_data={
             "shortcode": shortcode,
             "origin": origin,
@@ -211,8 +250,12 @@ async def parse_events(posts: list[dict[str, Any]], reference_date: str) -> list
                         "description": {"type": ["string", "null"]},
                         "date_iso": {"type": ["string", "null"]},
                         "start_time": {"type": ["string", "null"]},
+                        "end_time": {"type": ["string", "null"]},
                         "venue_name": {"type": ["string", "null"]},
                         "vibes": {"type": "array", "items": {"type": "string"}},
+                        "min_age": {"type": ["integer", "null"]},
+                        "lineup": {"type": "array", "items": {"type": "string"}},
+                        "crowd_note": {"type": ["string", "null"]},
                     },
                     "required": [
                         "post_index", "is_event", "confidence", "title", "vibes",

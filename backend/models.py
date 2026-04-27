@@ -73,6 +73,14 @@ class Event(BaseModel):
     organizer: Optional[str] = None
     tags: list[str] = Field(default_factory=list)
     min_age: Optional[int] = Field(default=None, ge=0)
+    lineup: list[str] = Field(
+        default_factory=list,
+        description="Artists / DJs / headliners (in billing order if known).",
+    )
+    crowd_note: Optional[str] = Field(
+        default=None,
+        description="One-line who-this-is-for from Claude (e.g. 'Techno-curious locals').",
+    )
 
     # v2 curation fields
     curation_tier: CurationTier = "standard"

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import pathlib
 
@@ -16,15 +15,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 load_dotenv(REPO_ROOT / ".env", override=True)
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Use a single event loop for the whole test session."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
-
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def pg_pool():
     """Pool against the configured DATABASE_URL. Skips if unset."""
     url = os.environ.get("DATABASE_URL", "")
@@ -35,7 +26,7 @@ async def pg_pool():
     await pool.close()
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def clean_tables(pg_pool):
     """Truncate scrape_cache and cost_log before each test."""
     async with pg_pool.acquire() as conn:

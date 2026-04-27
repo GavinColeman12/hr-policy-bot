@@ -74,7 +74,16 @@ New module `backend/db/`:
 
 Pipeline changes:
 
-- `backend/instagram/scraper.py` — replace `scrape_posts` with `scrape_account_content(handles, city)` that runs **two independent passes** through the cache + Apify: one for `posts` (TTL 24h, 2 per account), one for `stories` (TTL 24h, up to 5 per account). Each pass: read cache for non-expired rows; for misses, call Apify with the appropriate `resultsType`; write each account's results to cache. Returns a flat list of items each tagged with `content_type` ∈ `{"posts","stories"}`, plus a `cache_summary` dict (`{posts_cache_hit, posts_scraped, stories_cache_hit, stories_scraped, results_billed}`).
+- `backend/instagram/scraper.py` — replace `scrape_posts` with `scrape_account_content(handles, city)` that runs **two independent passes**, each with its own Apify actor and its own cache slot:
+
+  | Pass    | Actor                                       | Input shape                                                                  | TTL  |
+  |---------|---------------------------------------------|------------------------------------------------------------------------------|------|
+  | posts   | `apify/instagram-api-scraper`               | `{directUrls: ["https://www.instagram.com/<h>/", …], resultsType: "posts", resultsLimit: MAX_POSTS_PER_ACCOUNT, searchType: "user", searchLimit: 1}` | 24h |
+  | stories | `louisdeconinck/instagram-stories-scraper`  | `{profiles: ["https://www.instagram.com/<h>/", …]}`                          | 24h |
+
+  Each pass: read cache for non-expired rows for that `content_type`; for cache misses, invoke the actor via the official `apify-client` Python SDK; write each account's items to the cache. Returns a flat list of items each tagged with `content_type` ∈ `{"posts","stories"}`, plus a `cache_summary` dict (`{posts_cache_hit, posts_scraped, stories_cache_hit, stories_scraped, posts_results_billed, stories_results_billed}`).
+
+  Use `apify-client` (`pip install apify-client`) instead of raw `httpx` — `client.actor("…").call(run_input=…)` handles polling, dataset fetch, and retries automatically. Async wrapper: run blocking SDK calls in `asyncio.to_thread` so the FastAPI event loop isn't blocked.
 - `backend/extraction/extract.py` — Claude prompt + post summary updated to handle both posts and stories. Story items have `media_url`, `posted_at`, optional overlay text — these are passed in the same shape so Claude can extract events regardless. The resulting `Event.scrape_source` is `"profile"`, `"hashtag"`, or `"story"` accordingly.
 - `backend/main.py::search_events` — at the top, check `monthly_spend_usd() >= settings.MONTHLY_BUDGET_USD`. If exceeded, skip SCRAPE entirely (still runs DISCOVER + TRIAGE + reads cache only) and sets `budget_blocked=True` in the response. At the end, write a `cost_log` row.
 
@@ -83,13 +92,16 @@ Pipeline changes:
 In `backend/config.py`:
 
 ```python
+APIFY_POSTS_ACTOR: str = "apify/instagram-api-scraper"
+APIFY_STORIES_ACTOR: str = "louisdeconinck/instagram-stories-scraper"
+APIFY_POSTS_USD_PER_1K: float = 2.30      # check actor's pricing page
+APIFY_STORIES_USD_PER_1K: float = 2.30    # check actor's pricing page; default same
+
 MAX_POSTS_PER_ACCOUNT: int = 2            # was 8 — wider, shallower
-MAX_STORIES_PER_ACCOUNT: int = 5          # cap; most accounts have 0-3 active
 MAX_ACCOUNTS_PER_SEARCH: int = 60         # was 25
 SCRAPE_INCLUDE_STORIES: bool = True       # new — stories on by default
 SCRAPE_INCLUDE_HASHTAGS: bool = False     # was implicitly True
-APIFY_DATE_FILTER_DAYS: int = 14          # passes onlyPostsNewerThan
-APIFY_USD_PER_1K_RESULTS: float = 2.30    # for cost math
+APIFY_DATE_FILTER_DAYS: int = 14          # cuts old posts via onlyPostsNewerThan if supported
 POSTS_CACHE_TTL_HOURS: int = 24
 STORIES_CACHE_TTL_HOURS: int = 24         # user accepts trade-off
 MONTHLY_BUDGET_USD: float = 25.0          # leaves $5 buffer on $30 plan
@@ -98,12 +110,12 @@ DATABASE_URL: str | None = None           # env-loaded
 
 `backend/instagram/scraper.py`:
 
-- Posts pass: Apify call with `resultsType="posts"`, `resultsLimit=MAX_POSTS_PER_ACCOUNT`, `onlyPostsNewerThan=(now - APIFY_DATE_FILTER_DAYS).isoformat()`.
-- Stories pass (if `SCRAPE_INCLUDE_STORIES`): Apify call with `resultsType="stories"`, `resultsLimit=MAX_STORIES_PER_ACCOUNT`. No date filter — IG stories naturally expire at 24h.
-- Hashtag scrape gated behind `SCRAPE_INCLUDE_HASHTAGS` (default off).
-- After each Apify call, count `results_billed = len(items_returned)` — accounts with no active stories return 0 results and we don't get billed for them.
+- Posts pass: invoke `APIFY_POSTS_ACTOR` with the input shape shown above, batched via `directUrls` (≤10 URLs per call to stay within actor batch limits). Add `onlyPostsNewerThan` if the actor accepts it (the API scraper does); otherwise drop it.
+- Stories pass (if `SCRAPE_INCLUDE_STORIES`): invoke `APIFY_STORIES_ACTOR` with `{profiles: [profile URLs]}`. Stories naturally expire at 24h on Instagram, so no date filter needed.
+- Hashtag scrape (different from per-account scrape) gated behind `SCRAPE_INCLUDE_HASHTAGS` (default off).
+- For each actor call, `results_billed = len(items_returned)` — accounts with no active stories return 0 results and we don't get billed for them. Cost = `(posts_billed × POSTS_USD_PER_1K + stories_billed × STORIES_USD_PER_1K) / 1000`.
 
-Per-search cost at new defaults (cache miss): 60 accounts × 2 posts ≈ 120 post results, plus 60 × ~3 active stories ≈ 180 story results = **~300 results ≈ $0.69**. Configured budget of $25/month (`MONTHLY_BUDGET_USD`, $5 buffer under the $30 plan) covers **~36 fresh searches/month**. With 24h cache for both, repeated city searches in the same day are free, so the practical ceiling is significantly higher.
+Per-search cost at new defaults (cache miss): 60 accounts × 2 posts ≈ 120 post results, plus 60 × ~3 active stories ≈ 180 story results = **~300 results ≈ $0.69** (assuming both actors at $2.30/1k — verify actual pricing on each actor's Apify page and adjust the config). Configured budget of $25/month (`MONTHLY_BUDGET_USD`, $5 buffer under the $30 plan) covers **~36 fresh searches/month**. With 24h cache for both content types, repeated city searches in the same day are free, so the practical ceiling is significantly higher.
 
 ### D. Streamlit dashboard (`streamlit_app/`)
 
@@ -175,10 +187,10 @@ Streamlit dashboard reads `scrape_cache` and `cost_log` directly via `psycopg`.
 - `backend/db/cache.py`                 — scrape cache helpers (new)
 - `backend/db/cost.py`                  — cost log helpers (new)
 - `backend/db/init.sql`                 — schema migration (new)
-- `backend/instagram/scraper.py`        — cache integration + date filter + hashtag gate
+- `backend/instagram/scraper.py`        — two-actor scrape (posts + stories), cache integration, hashtag gate
 - `backend/main.py`                     — budget check + record_run call
-- `backend/config.py`                   — new settings + tightened defaults
-- `backend/requirements.txt`            — add `asyncpg`
+- `backend/config.py`                   — new settings + tightened defaults + per-actor pricing
+- `backend/requirements.txt`            — add `asyncpg`, `apify-client`
 - `streamlit_app/app.py`                — dashboard (new)
 - `streamlit_app/db.py`                 — sync DB helpers (new)
 - `streamlit_app/requirements.txt`      — Streamlit deps (new)
@@ -202,7 +214,7 @@ Streamlit dashboard reads `scrape_cache` and `cost_log` directly via `psycopg`.
 1. **DB migration**: run `psql $DATABASE_URL -f backend/db/init.sql`, then `\dt` shows both tables.
 2. **Cache cold + warm**: run the same Berlin search twice in a row. First run writes rows to `scrape_cache` for both `posts` and `stories` content types; second run logs `accounts_cache_hit > 0` and `apify_results_billed = 0` for the cached handles. `SELECT content_type, COUNT(*) FROM scrape_cache GROUP BY content_type` shows both types populated.
 3. **Budget cap**: temporarily set `MONTHLY_BUDGET_USD = 0.01`, run a search. Response has `budget_blocked: true` and 0 events scraped (only cached). Reset.
-4. **Cost numbers**: after a fresh search, `SELECT apify_cost_usd FROM cost_log ORDER BY run_at DESC LIMIT 1` should match `(posts_scraped + stories_scraped) * 2.30 / 1000` to 4 decimals.
+4. **Cost numbers**: after a fresh search, `SELECT apify_cost_usd FROM cost_log ORDER BY run_at DESC LIMIT 1` should equal `(posts_scraped × POSTS_USD_PER_1K + stories_scraped × STORIES_USD_PER_1K) / 1000` to 4 decimals.
 5. **Story extraction**: a search that surfaces a story-only event (e.g., a venue's "doors at 22 tonight" story) should produce an `Event` with `scrape_source = "story"`. Verify by inspecting the `/api/search` response.
 6. **Streamlit**: `cd streamlit_app && pip install -r requirements.txt && streamlit run app.py`. Verify all 4 tabs render. Run a search via the Search tab and watch a row appear in the Runs tab.
 7. **Streamlit Cloud**: deploy, hit Cost tab, confirm chart renders against Neon. Search tab will error gracefully if `BACKEND_URL` isn't set.

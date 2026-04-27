@@ -2,15 +2,17 @@
 
 ## Context
 
-The v2 pipeline (DISCOVER → TRIAGE → SCRAPE → EXTRACT → SCORE → CURATE) is functional but expensive: every `/api/search` invokes the Apify Instagram scraper at $2.30 / 1,000 results. With the current defaults (25 accounts × 8 posts ÷ hashtag scrape on top), a single Berlin search bills ~280 results ≈ $0.65. The user just bought the Apify Starter plan ($30 / month, ~13,000 results), and wants to:
+The v2 pipeline (DISCOVER → TRIAGE → SCRAPE → EXTRACT → SCORE → CURATE) is functional but expensive: every `/api/search` invokes the Apify Instagram scraper at $2.30 / 1,000 results. With the previous defaults (25 accounts × 8 posts plus hashtag scrape on top), a Berlin search bills ~280 results ≈ $0.65. The user just bought the Apify Starter plan ($30 / month, ~13,000 results), and wants to:
 
 1. Not burn through credits in a few searches.
 2. Track what the pipeline is doing so they can iterate on it.
 3. Have a deployable surface for that tracking.
 
-The user already provisioned a Neon Postgres database and asked for a Streamlit page deployed to Streamlit Community Cloud. This spec wraps all three asks into one coherent change because they share infrastructure: Postgres becomes the cache that drives cost control AND the data source the Streamlit dashboard reads from.
+The user also wants to **scrape Instagram stories** alongside posts — venues frequently announce "tonight only" events via stories without ever posting. This widens coverage but adds one Apify call per search.
 
-Outcome: at default settings, ~$0.21 per fresh search; repeated searches in the same 24h window are free; ops/dev visibility via a 4-tab Streamlit dashboard.
+The user already provisioned a Neon Postgres database and asked for a Streamlit page deployed to Streamlit Community Cloud. This spec wraps all asks into one coherent change because they share infrastructure: Postgres becomes the cache that drives cost control AND the data source the Streamlit dashboard reads from.
+
+Outcome: at default settings (60 accounts × 2 posts + 60 accounts × ~3 stories), ~$0.69 per fresh search; repeated searches in the same 24h window are free; ops/dev visibility via a 4-tab Streamlit dashboard.
 
 ---
 
@@ -21,12 +23,17 @@ Outcome: at default settings, ~$0.21 per fresh search; repeated searches in the 
 Two tables. Keep it minimal — extend later if analytics need it.
 
 ```sql
+-- One row per (account, content_type) pair. content_type ∈ ('posts', 'stories').
+-- Posts and stories cache independently so they can have different TTLs and
+-- be refreshed on different cadences.
 CREATE TABLE scrape_cache (
-  account_handle  TEXT PRIMARY KEY,
-  posts           JSONB NOT NULL,           -- raw Apify post list
+  account_handle  TEXT NOT NULL,
+  content_type    TEXT NOT NULL CHECK (content_type IN ('posts', 'stories')),
+  items           JSONB NOT NULL,           -- raw Apify post or story list
   fetched_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  expires_at      TIMESTAMPTZ NOT NULL,     -- fetched_at + 24h
-  results_billed  INTEGER NOT NULL          -- Apify-billed count for this row
+  expires_at      TIMESTAMPTZ NOT NULL,     -- fetched_at + per-type TTL
+  results_billed  INTEGER NOT NULL,         -- Apify-billed count for this row
+  PRIMARY KEY (account_handle, content_type)
 );
 CREATE INDEX scrape_cache_expires_idx ON scrape_cache (expires_at);
 
@@ -41,6 +48,7 @@ CREATE TABLE cost_log (
   accounts_cache_hit    INTEGER NOT NULL DEFAULT 0,
   accounts_scraped      INTEGER NOT NULL DEFAULT 0,
   posts_scraped         INTEGER NOT NULL DEFAULT 0,
+  stories_scraped       INTEGER NOT NULL DEFAULT 0,
   events_extracted      INTEGER NOT NULL DEFAULT 0,
   apify_results_billed  INTEGER NOT NULL DEFAULT 0,
   apify_cost_usd        NUMERIC(10,4) NOT NULL DEFAULT 0,
@@ -61,12 +69,13 @@ Migration applied via a one-shot SQL script (`backend/db/init.sql`) run once aga
 New module `backend/db/`:
 
 - `backend/db/__init__.py` — exports `get_pool()` (cached `asyncpg.Pool`, lazy-initialised on first use).
-- `backend/db/cache.py` — `read_scrape_cache(handles) -> dict[handle, posts]` and `write_scrape_cache(handle, posts, results_billed)`. Skips entirely if `DATABASE_URL` is unset (graceful degradation; the app keeps working without Postgres).
+- `backend/db/cache.py` — `read_scrape_cache(handles, content_type)` returns `dict[handle, items]` filtering on non-expired rows; `write_scrape_cache(handle, content_type, items, results_billed, ttl_hours)` upserts. Skips entirely if `DATABASE_URL` is unset (graceful degradation; the app keeps working without Postgres).
 - `backend/db/cost.py` — `record_run(run_data: dict)` writes one row to `cost_log`; `monthly_spend_usd() -> float` sums `apify_cost_usd` for `run_at >= date_trunc('month', now())`.
 
 Pipeline changes:
 
-- `backend/instagram/scraper.py::scrape_posts` — split into `scrape_with_cache(handles, city)`. For each handle: try `read_scrape_cache`; for cache misses, batch-scrape via Apify, then `write_scrape_cache` per account so partial failures don't poison the whole batch. Returns the union plus a `cache_summary` dict (`{cache_hit, scraped, results_billed}`) that bubbles up to `main.py`.
+- `backend/instagram/scraper.py` — replace `scrape_posts` with `scrape_account_content(handles, city)` that runs **two independent passes** through the cache + Apify: one for `posts` (TTL 24h, 2 per account), one for `stories` (TTL 24h, up to 5 per account). Each pass: read cache for non-expired rows; for misses, call Apify with the appropriate `resultsType`; write each account's results to cache. Returns a flat list of items each tagged with `content_type` ∈ `{"posts","stories"}`, plus a `cache_summary` dict (`{posts_cache_hit, posts_scraped, stories_cache_hit, stories_scraped, results_billed}`).
+- `backend/extraction/extract.py` — Claude prompt + post summary updated to handle both posts and stories. Story items have `media_url`, `posted_at`, optional overlay text — these are passed in the same shape so Claude can extract events regardless. The resulting `Event.scrape_source` is `"profile"`, `"hashtag"`, or `"story"` accordingly.
 - `backend/main.py::search_events` — at the top, check `monthly_spend_usd() >= settings.MONTHLY_BUDGET_USD`. If exceeded, skip SCRAPE entirely (still runs DISCOVER + TRIAGE + reads cache only) and sets `budget_blocked=True` in the response. At the end, write a `cost_log` row.
 
 ### C. Apify cost guardrails (config + scraper changes)
@@ -74,23 +83,27 @@ Pipeline changes:
 In `backend/config.py`:
 
 ```python
-MAX_POSTS_PER_ACCOUNT: int = 5            # was 8
-MAX_ACCOUNTS_PER_SEARCH: int = 18         # was 25
+MAX_POSTS_PER_ACCOUNT: int = 2            # was 8 — wider, shallower
+MAX_STORIES_PER_ACCOUNT: int = 5          # cap; most accounts have 0-3 active
+MAX_ACCOUNTS_PER_SEARCH: int = 60         # was 25
+SCRAPE_INCLUDE_STORIES: bool = True       # new — stories on by default
 SCRAPE_INCLUDE_HASHTAGS: bool = False     # was implicitly True
-APIFY_DATE_FILTER_DAYS: int = 14          # new — passes onlyPostsNewerThan
+APIFY_DATE_FILTER_DAYS: int = 14          # passes onlyPostsNewerThan
 APIFY_USD_PER_1K_RESULTS: float = 2.30    # for cost math
-SCRAPE_CACHE_TTL_HOURS: int = 24
+POSTS_CACHE_TTL_HOURS: int = 24
+STORIES_CACHE_TTL_HOURS: int = 24         # user accepts trade-off
 MONTHLY_BUDGET_USD: float = 25.0          # leaves $5 buffer on $30 plan
 DATABASE_URL: str | None = None           # env-loaded
 ```
 
 `backend/instagram/scraper.py`:
 
-- Add `onlyPostsNewerThan` to the Apify payload, computed as `(now - APIFY_DATE_FILTER_DAYS).isoformat()`.
-- Hashtag scrape gated behind `SCRAPE_INCLUDE_HASHTAGS`.
-- After each Apify call, increment a per-search counter of `results_billed = len(posts_returned)` so the cost row is exact, not estimated.
+- Posts pass: Apify call with `resultsType="posts"`, `resultsLimit=MAX_POSTS_PER_ACCOUNT`, `onlyPostsNewerThan=(now - APIFY_DATE_FILTER_DAYS).isoformat()`.
+- Stories pass (if `SCRAPE_INCLUDE_STORIES`): Apify call with `resultsType="stories"`, `resultsLimit=MAX_STORIES_PER_ACCOUNT`. No date filter — IG stories naturally expire at 24h.
+- Hashtag scrape gated behind `SCRAPE_INCLUDE_HASHTAGS` (default off).
+- After each Apify call, count `results_billed = len(items_returned)` — accounts with no active stories return 0 results and we don't get billed for them.
 
-Per-search cost at new defaults (cache miss): 18 × 5 = **90 results ≈ $0.21**. Configured budget of $25/month (the `MONTHLY_BUDGET_USD` cutoff, $5 buffer under the $30 plan) covers **~119 fresh searches/month**. With 24h cache, repeated city searches are free, so the practical ceiling is well above that.
+Per-search cost at new defaults (cache miss): 60 accounts × 2 posts ≈ 120 post results, plus 60 × ~3 active stories ≈ 180 story results = **~300 results ≈ $0.69**. Configured budget of $25/month (`MONTHLY_BUDGET_USD`, $5 buffer under the $30 plan) covers **~36 fresh searches/month**. With 24h cache for both, repeated city searches in the same day are free, so the practical ceiling is significantly higher.
 
 ### D. Streamlit dashboard (`streamlit_app/`)
 
@@ -137,10 +150,15 @@ User → /api/search (FastAPI)
         ├─ DISCOVER (SerpAPI + listicles)             [no DB writes]
         ├─ TRIAGE  (Claude)                           [no DB writes]
         │
-        ├─ SCRAPE with cache:
-        │     1. read_scrape_cache(handles)
-        │     2. for cache misses → Apify
-        │     3. write_scrape_cache(handle, posts, billed)
+        ├─ SCRAPE with cache (two passes — posts and stories):
+        │     posts pass:
+        │       1. read_scrape_cache(handles, "posts")
+        │       2. for cache misses → Apify (resultsType=posts, +date filter)
+        │       3. write_scrape_cache(handle, "posts", items, billed, ttl=24h)
+        │     stories pass (if SCRAPE_INCLUDE_STORIES):
+        │       1. read_scrape_cache(handles, "stories")
+        │       2. for cache misses → Apify (resultsType=stories)
+        │       3. write_scrape_cache(handle, "stories", items, billed, ttl=24h)
         │
         ├─ EXTRACT / SCORE / CURATE (Claude)
         │
@@ -182,12 +200,13 @@ Streamlit dashboard reads `scrape_cache` and `cost_log` directly via `psycopg`.
 ## Verification
 
 1. **DB migration**: run `psql $DATABASE_URL -f backend/db/init.sql`, then `\dt` shows both tables.
-2. **Cache cold + warm**: run the same Berlin search twice in a row. First run writes ≥1 row to `scrape_cache`; second run logs `accounts_cache_hit > 0` and `apify_results_billed = 0` for the cached handles.
+2. **Cache cold + warm**: run the same Berlin search twice in a row. First run writes rows to `scrape_cache` for both `posts` and `stories` content types; second run logs `accounts_cache_hit > 0` and `apify_results_billed = 0` for the cached handles. `SELECT content_type, COUNT(*) FROM scrape_cache GROUP BY content_type` shows both types populated.
 3. **Budget cap**: temporarily set `MONTHLY_BUDGET_USD = 0.01`, run a search. Response has `budget_blocked: true` and 0 events scraped (only cached). Reset.
-4. **Cost numbers**: after a fresh search, `SELECT apify_cost_usd FROM cost_log ORDER BY run_at DESC LIMIT 1` should match `posts_scraped * 2.30 / 1000` to 4 decimals.
-5. **Streamlit**: `cd streamlit_app && pip install -r requirements.txt && streamlit run app.py`. Verify all 4 tabs render. Run a search via the Search tab and watch a row appear in the Runs tab.
-6. **Streamlit Cloud**: deploy, hit Cost tab, confirm chart renders against Neon. Search tab will error gracefully if `BACKEND_URL` isn't set.
-7. **Graceful degradation**: temporarily set `DATABASE_URL=""` in the backend, restart, confirm `/api/search` still works (and logs a warning).
+4. **Cost numbers**: after a fresh search, `SELECT apify_cost_usd FROM cost_log ORDER BY run_at DESC LIMIT 1` should match `(posts_scraped + stories_scraped) * 2.30 / 1000` to 4 decimals.
+5. **Story extraction**: a search that surfaces a story-only event (e.g., a venue's "doors at 22 tonight" story) should produce an `Event` with `scrape_source = "story"`. Verify by inspecting the `/api/search` response.
+6. **Streamlit**: `cd streamlit_app && pip install -r requirements.txt && streamlit run app.py`. Verify all 4 tabs render. Run a search via the Search tab and watch a row appear in the Runs tab.
+7. **Streamlit Cloud**: deploy, hit Cost tab, confirm chart renders against Neon. Search tab will error gracefully if `BACKEND_URL` isn't set.
+8. **Graceful degradation**: temporarily set `DATABASE_URL=""` in the backend, restart, confirm `/api/search` still works (and logs a warning).
 
 ---
 

@@ -292,18 +292,8 @@ body {
 .chip.active[data-vibe="festival"]      { background: #c026d3; }
 .chip.active[data-vibe="sport_fitness"] { background: #0891b2; }
 
-/* Source chip colors */
-.chip.active[data-source="google"]           { background: #4285f4; }
-.chip.active[data-source="eventbrite"]       { background: #f05537; }
-.chip.active[data-source="meetup"]           { background: #ed1c40; }
+/* Source chip colors (Instagram-only in v2) */
 .chip.active[data-source="instagram"]        { background: linear-gradient(135deg, #833ab4, #fd1d1d, #fcb045); }
-.chip.active[data-source="reddit"]           { background: #ff4500; }
-.chip.active[data-source="twitter"]          { background: #1da1f2; }
-.chip.active[data-source="facebook"]         { background: #1877f2; }
-.chip.active[data-source="resident_advisor"] { background: #141414; border: 1px solid #555; }
-.chip.active[data-source="fetlife"]          { background: #2e2e2e; border: 1px solid #666; }
-.chip.active[data-source="ticketmaster"]     { background: #026cdf; }
-.chip.active[data-source="yelp"]             { background: #d32323; }
 
 /* Sort and filter controls row */
 .filter-controls-row {
@@ -580,18 +570,7 @@ body {
   color: #fff;
 }
 
-.source-google           { background: #4285f4; }
-.source-eventbrite       { background: #f05537; }
-.source-meetup           { background: #ed1c40; }
 .source-instagram        { background: #c13584; }
-.source-reddit           { background: #ff4500; }
-.source-twitter          { background: #1da1f2; }
-.source-facebook         { background: #1877f2; }
-.source-resident_advisor { background: #333; }
-.source-fetlife          { background: #444; }
-.source-ticketmaster     { background: #026cdf; }
-.source-yelp             { background: #d32323; }
-.source-blog             { background: #6b7280; }
 
 .event-card-title {
   font-size: 1.1rem;
@@ -953,3 +932,292 @@ body {
 .event-grid .event-card:nth-child(10) { animation-delay: 0.45s; }
 .event-grid .event-card:nth-child(11) { animation-delay: 0.50s; }
 .event-grid .event-card:nth-child(12) { animation-delay: 0.55s; }
+
+
+/* ============================================================
+   Curation — v2 Claude-powered evening guide UI
+   ============================================================ */
+
+.event-card-image-wrap {
+  position: relative;
+}
+
+.event-card-tier-overlay {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 2;
+  display: flex;
+  gap: 6px;
+}
+
+.event-card-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.badge-top-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--accent-primary);
+  color: #fff;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  box-shadow: 0 4px 12px rgba(233, 69, 96, 0.35);
+}
+
+.badge-hidden-gem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: linear-gradient(135deg, #a78bfa, #7c3aed);
+  color: #fff;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.badge-skip {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(120, 120, 140, 0.2);
+  color: #888;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  text-decoration: line-through;
+}
+
+.event-card.is-top-pick {
+  border: 2px solid var(--accent-primary);
+  box-shadow:
+    0 0 0 1px rgba(233, 69, 96, 0.2),
+    0 12px 32px rgba(233, 69, 96, 0.18);
+}
+
+.event-card.is-hidden-gem {
+  border: 1px solid rgba(167, 139, 250, 0.45);
+  box-shadow: 0 8px 24px rgba(124, 58, 237, 0.12);
+}
+
+.event-card.is-skip {
+  opacity: 0.45;
+  filter: grayscale(0.7);
+}
+
+.event-card.is-skip:hover {
+  opacity: 0.7;
+  filter: grayscale(0.4);
+}
+
+.event-card.is-skip .event-card-title {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.35);
+}
+
+.account-handle-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  padding: 2px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+}
+
+.score-breakdown {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  margin-top: 10px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+}
+
+.score-breakdown__row {
+  display: grid;
+  grid-template-columns: 70px 1fr 36px;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.score-breakdown__label {
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.score-breakdown__bar {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.score-breakdown__fill {
+  display: block;
+  height: 100%;
+  background: var(--accent-gradient);
+  transition: width var(--transition-normal);
+}
+
+.score-breakdown__value {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--text-primary);
+}
+
+/* Evening guide hero */
+
+.evening-guide {
+  background: var(--bg-card);
+  border-radius: var(--radius-xl);
+  padding: 24px;
+  margin: 20px 0 24px;
+  border: 1px solid rgba(233, 69, 96, 0.18);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+}
+
+.evening-guide__demo-note {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+  margin-bottom: 10px;
+}
+
+.evening-guide__summary {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.evening-guide__section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+  margin-bottom: 8px;
+}
+
+.evening-guide__top-pick {
+  margin-top: 18px;
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  border-left: 3px solid var(--accent-primary);
+}
+
+.evening-guide__step-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.evening-guide__step-venue {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.evening-guide__itinerary {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.evening-guide__step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  border: 1px solid var(--border-color);
+}
+
+.evening-guide__step-num {
+  font-weight: 700;
+  color: var(--accent-primary);
+  min-width: 22px;
+  font-size: 16px;
+}
+
+.evening-guide__collapsible {
+  margin-top: 14px;
+}
+
+.evening-guide__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.evening-guide__toggle:hover {
+  color: var(--text-primary);
+}
+
+.evening-guide__list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.evening-guide__list li {
+  font-size: 13px;
+  color: var(--text-primary);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.evening-guide__list--skip li {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+.evening-guide__list-venue {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 768px) {
+  .evening-guide { padding: 16px; }
+  .evening-guide__top-pick { padding: 12px; }
+  .score-breakdown__row { grid-template-columns: 60px 1fr 32px; }
+}
+

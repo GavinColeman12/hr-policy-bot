@@ -29,3 +29,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Test/screenshot artifacts
+*.png
+.playwright-mcp/

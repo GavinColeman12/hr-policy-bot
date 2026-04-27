@@ -1,30 +1,40 @@
 import React from 'react';
-import { BarChart3, Globe, Clock, AlertTriangle } from 'lucide-react';
+import { BarChart3, Clock, AlertTriangle, Users, Search, FileText } from 'lucide-react';
 
 export default function StatsBar({ meta }) {
   if (!meta) return null;
 
-  const { total, duration, sources_searched, source_errors } = meta;
-  const errorList = source_errors
-    ? (typeof source_errors === 'object' && !Array.isArray(source_errors))
-      ? Object.entries(source_errors)
-      : Array.isArray(source_errors)
-        ? source_errors
-        : []
-    : [];
+  const {
+    total,
+    duration,
+    accounts_discovered,
+    accounts_triaged,
+    posts_scraped,
+    events_extracted,
+    errors,
+  } = meta;
+  const errorList = Array.isArray(errors) ? errors : [];
 
   return (
     <div className="stats-bar">
       <div className="stat-item">
         <BarChart3 size={16} className="stat-icon" />
-        <span className="stat-value">{total}</span> events found
+        <span className="stat-value">{total}</span> events
       </div>
 
-      <div className="stat-item">
-        <Globe size={16} className="stat-icon" />
-        <span className="stat-value">
-          {Array.isArray(sources_searched) ? sources_searched.length : 0}
-        </span> sources searched
+      <div className="stat-item" title="Accounts discovered → triaged">
+        <Users size={16} className="stat-icon" />
+        <span className="stat-value">{accounts_triaged ?? 0}</span> / {accounts_discovered ?? 0} accounts
+      </div>
+
+      <div className="stat-item" title="Posts scraped from Instagram">
+        <Search size={16} className="stat-icon" />
+        <span className="stat-value">{posts_scraped ?? 0}</span> posts
+      </div>
+
+      <div className="stat-item" title="Events extracted by Claude">
+        <FileText size={16} className="stat-icon" />
+        <span className="stat-value">{events_extracted ?? 0}</span> extracted
       </div>
 
       <div className="stat-item">
@@ -35,15 +45,11 @@ export default function StatsBar({ meta }) {
       {errorList.length > 0 && (
         <div className="stat-item stat-errors">
           <AlertTriangle size={16} />
-          <span>{errorList.length} source(s) had errors</span>
+          <span>{errorList.length} stage(s) had errors</span>
           <ul className="error-dropdown">
             {errorList.map((err, i) => (
               <li key={i}>
-                {Array.isArray(err)
-                  ? `${err[0]}: ${err[1]}`
-                  : typeof err === 'object'
-                    ? `${err.source || 'unknown'}: ${err.error || 'failed'}`
-                    : String(err)}
+                {typeof err === 'object' ? `${err.stage || 'unknown'}: ${err.error || 'failed'}` : String(err)}
               </li>
             ))}
           </ul>

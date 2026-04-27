@@ -8,18 +8,11 @@ const VIBE_LABELS = {
   sport_fitness: 'Sport & Fitness',
 };
 
-const SOURCE_LABELS = {
-  google: 'Google', eventbrite: 'Eventbrite', meetup: 'Meetup',
-  instagram: 'Instagram', reddit: 'Reddit', twitter: 'X / Twitter',
-  facebook: 'Facebook', resident_advisor: 'Resident Advisor',
-  fetlife: 'FetLife', ticketmaster: 'Ticketmaster',
-  dice: 'Dice.fm', blog: 'Blogs', guides: 'Event Guides',
-};
-
 export default function FilterPanel({
   availableVibes, selectedVibes, setSelectedVibes,
-  availableSources, selectedSources, setSelectedSources,
-  sortBy, setSortBy, freeOnly, setFreeOnly,
+  curationFilter, setCurationFilter,
+  sortBy, setSortBy,
+  freeOnly, setFreeOnly,
   maxDistance, setMaxDistance,
 }) {
   const toggleVibe = (vibe) => {
@@ -29,28 +22,14 @@ export default function FilterPanel({
     );
   };
 
-  const toggleSource = (source) => {
-    const val = typeof source === 'string' ? source : source.value || source;
-    setSelectedSources((prev) =>
-      prev.includes(val) ? prev.filter((s) => s !== val) : [...prev, val]
-    );
-  };
-
   const getVibeValue = (v) => (typeof v === 'string' ? v : v.value || v);
   const getVibeLabel = (v) => {
     const val = getVibeValue(v);
     return VIBE_LABELS[val] || val.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   };
 
-  const getSourceValue = (s) => (typeof s === 'string' ? s : s.value || s);
-  const getSourceLabel = (s) => {
-    const val = getSourceValue(s);
-    return SOURCE_LABELS[val] || val.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-  };
-
   return (
     <div className="filter-panel">
-      {/* Vibes */}
       <div className="filter-section">
         <div className="filter-section-header">
           <h3>Vibes</h3>
@@ -80,44 +59,25 @@ export default function FilterPanel({
         </div>
       </div>
 
-      {/* Sources */}
-      <div className="filter-section">
-        <div className="filter-section-header">
-          <h3>Sources</h3>
-          <div className="filter-actions">
-            <button className="filter-action-btn" onClick={() => setSelectedSources(availableSources.map(getSourceValue))}>
-              All
-            </button>
-            <button className="filter-action-btn" onClick={() => setSelectedSources([])}>
-              Clear
-            </button>
-          </div>
-        </div>
-        <div className="chip-group">
-          {availableSources.map((source) => {
-            const val = getSourceValue(source);
-            return (
-              <button
-                key={val}
-                className={`chip ${selectedSources.includes(val) ? 'active' : ''}`}
-                data-source={val}
-                onClick={() => toggleSource(source)}
-              >
-                {getSourceLabel(source)}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Controls row */}
       <div className="filter-section">
         <div className="filter-controls-row">
+          <select
+            className="sort-select"
+            value={curationFilter}
+            onChange={(e) => setCurationFilter(e.target.value)}
+            aria-label="Filter by curation tier"
+          >
+            <option value="all">All events</option>
+            <option value="top_pick">Top picks only</option>
+            <option value="hidden_gem">Hidden gems only</option>
+            <option value="exclude_skip">Hide skip-list</option>
+          </select>
+
           <select className="sort-select" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+            <option value="curation">Sort: Curation</option>
             <option value="engagement">Sort: Popularity</option>
             <option value="distance">Sort: Distance</option>
             <option value="date">Sort: Time</option>
-            <option value="price">Sort: Price</option>
           </select>
 
           <label className="free-toggle">

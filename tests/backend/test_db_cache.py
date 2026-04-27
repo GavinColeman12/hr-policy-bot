@@ -4,12 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from backend.db import cache
-
-
-pytestmark = pytest.mark.asyncio
 
 
 async def test_write_then_read_returns_items(pg_pool, clean_tables):

@@ -52,6 +52,167 @@ def _sidebar_budget():
         st.sidebar.warning(f"{pct*100:.0f}% of budget used")
 
 
+def _format_when(date_str: str | None) -> str:
+    """Vivid time description: 'Tonight 11 PM', 'In 3h', 'Sat 23:00'."""
+    if not date_str:
+        return ""
+    from datetime import datetime, timezone
+    try:
+        d = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return str(date_str)[:16]
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    delta_hours = (d - now).total_seconds() / 3600.0
+    time_str = d.strftime("%I:%M %p").lstrip("0")
+    if 0 < delta_hours <= 6 and d.date() == now.date():
+        return f"In {int(round(delta_hours))}h · {time_str}"
+    if d.date() == now.date():
+        return f"Tonight · {time_str}"
+    if (d.date() - now.date()).days == 1:
+        return f"Tomorrow · {time_str}"
+    if 0 <= (d.date() - now.date()).days <= 6:
+        return f"{d.strftime('%A')} · {time_str}"
+    return d.strftime("%a %b %-d · ") + time_str
+
+
+def _format_end_time(start_str: str | None, end_str: str | None) -> str | None:
+    if not end_str:
+        return None
+    from datetime import datetime
+    try:
+        e = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+        s = datetime.fromisoformat(start_str.replace("Z", "+00:00")) if start_str else None
+    except (ValueError, TypeError):
+        return None
+    if s and s.date() == e.date():
+        return "→ " + e.strftime("%I:%M %p").lstrip("0")
+    return "→ " + e.strftime("%a %I:%M %p").lstrip("0")
+
+
+def _curation_reason(score_breakdown: dict | None) -> str | None:
+    if not score_breakdown:
+        return None
+    items = [(k, v) for k, v in score_breakdown.items() if isinstance(v, (int, float))]
+    if not items:
+        return None
+    top_key, top_val = max(items, key=lambda kv: kv[1])
+    if top_val < 0.7:
+        return None
+    return {
+        "quality": "Trustworthy event with solid lineup info",
+        "popularity": "One of the biggest things happening",
+        "fun_factor": "Going to be a great time",
+        "demographic_fit": "Squarely in your scene",
+    }.get(top_key)
+
+
+def _render_event_card(ev: dict) -> None:
+    """Render one event with all the context the React card has."""
+    tier = ev.get("curation_tier", "standard")
+    badge = {
+        "top_pick": "🌟 TOP PICK",
+        "hidden_gem": "💎 HIDDEN GEM",
+        "skip": "✖ SKIP",
+    }.get(tier, "")
+    is_story = ev.get("scrape_source") == "story"
+
+    with st.container(border=True):
+        # Header row
+        header_cols = st.columns([3, 1])
+        with header_cols[0]:
+            badges_md = ""
+            if badge:
+                badges_md += f":violet-background[**{badge}**] "
+            if is_story:
+                badges_md += ":orange-background[**⚡ JUST DROPPED**] "
+            if badges_md:
+                st.markdown(badges_md)
+            st.markdown(f"### {ev.get('title', '(untitled)')}")
+            handle = ev.get("account_handle")
+            venue = ev.get("venue_name") or ""
+            meta_bits = []
+            if handle:
+                meta_bits.append(f"`@{handle}`")
+            if venue:
+                meta_bits.append(f"📍 {venue}")
+            if meta_bits:
+                st.markdown(" · ".join(meta_bits))
+
+        with header_cols[1]:
+            img = ev.get("image_url")
+            if img:
+                st.image(img, use_container_width=True)
+
+        # When / end-time
+        when_bits = []
+        when = _format_when(ev.get("date"))
+        if when:
+            when_bits.append(f"🕒 **{when}**")
+        end_str = _format_end_time(ev.get("date"), ev.get("end_date"))
+        if end_str:
+            when_bits.append(end_str)
+        if when_bits:
+            st.markdown(" ".join(when_bits))
+
+        # Blurb
+        desc = (ev.get("description") or "").strip()
+        if desc:
+            blurb = desc[:280] + ("…" if len(desc) > 280 else "")
+            st.markdown(f"> {blurb}")
+
+        # Lineup
+        lineup = ev.get("lineup") or []
+        if lineup:
+            shown = " · ".join(lineup[:5])
+            extra = f" +{len(lineup) - 5}" if len(lineup) > 5 else ""
+            st.markdown(f"🎤 **Lineup:** {shown}{extra}")
+
+        # Inline badges row: distance / price / age / vibes
+        chip_bits = []
+        if ev.get("distance_km") is not None:
+            km = ev["distance_km"]
+            chip_bits.append(f"📍 {int(round(km*1000))}m" if km < 1 else f"📍 {km:.1f} km")
+        if ev.get("price"):
+            chip_bits.append(f"💶 {ev['price']}")
+        if ev.get("min_age"):
+            chip_bits.append(f"🛡 {ev['min_age']}+")
+        for v in ev.get("vibes") or []:
+            chip_bits.append(f"`{v}`")
+        if chip_bits:
+            st.markdown(" · ".join(chip_bits))
+
+        # Crowd note
+        crowd = ev.get("crowd_note")
+        if crowd:
+            st.markdown(f"_{crowd}_")
+
+        # Engagement + scores
+        likes = ev.get("likes") or 0
+        comments = ev.get("comments") or 0
+        if likes or comments:
+            st.caption(f"❤ {likes:,} · 💬 {comments:,}")
+
+        sb = ev.get("score_breakdown") or {}
+        if sb:
+            score_cols = st.columns(4)
+            for col, key, label in zip(
+                score_cols,
+                ["quality", "popularity", "fun_factor", "demographic_fit"],
+                ["Quality", "Popularity", "Fun", "Fit"],
+            ):
+                col.metric(label, f"{float(sb.get(key, 0)):.2f}")
+
+        reason = _curation_reason(sb)
+        if reason:
+            st.markdown(f":red[**{reason.upper()}**]")
+
+        url = ev.get("source_url")
+        if url:
+            st.link_button("View on Instagram ↗", url)
+
+
 def _tab_search():
     backend_url = _resolve_backend_url()
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -92,17 +253,18 @@ def _tab_search():
                 st.caption(guide.get("demographic_note", ""))
                 st.write(guide.get("summary_text", ""))
             st.subheader("Events")
-            for ev in data.get("events", []):
-                badge = {
-                    "top_pick": "🌟",
-                    "hidden_gem": "💎",
-                    "skip": "✖",
-                    "standard": "•",
-                }.get(ev.get("curation_tier"), "•")
-                st.markdown(
-                    f"**{badge} {ev['title']}** — `@{ev.get('account_handle','?')}` "
-                    f"({ev.get('scrape_source','?')}) · {ev.get('venue_name','?')}"
-                )
+            events_by_id = {e["id"]: e for e in data.get("events", []) if e.get("id")}
+            ordered_ids: list[str] = []
+            if guide:
+                for eid in (guide.get("itinerary_ids") or []):
+                    if eid in events_by_id and eid not in ordered_ids:
+                        ordered_ids.append(eid)
+            for e in data.get("events", []):
+                eid = e.get("id")
+                if eid and eid not in ordered_ids:
+                    ordered_ids.append(eid)
+            for eid in ordered_ids:
+                _render_event_card(events_by_id[eid])
 
 
 def _tab_runs():

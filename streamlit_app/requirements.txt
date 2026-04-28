@@ -1,6 +1,20 @@
+# All Streamlit Cloud dependencies — both the dashboard and the in-process
+# pipeline that the Search tab calls. Streamlit Cloud auto-installs from
+# this file because it sits next to the main file (streamlit_app/app.py).
+
+# --- Streamlit dashboard ---
 streamlit>=1.40.0
 psycopg[binary]>=3.2.0
 psycopg-pool>=3.2.0
 pandas>=2.2.0
-httpx>=0.25.0
 python-dotenv>=1.0.0
+
+# --- Backend pipeline (imported directly by streamlit_app/app.py) ---
+httpx>=0.25.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-dateutil>=2.8.2
+anthropic>=0.40.0
+asyncpg>=0.29.0
+apify-client>=1.7.0
+eval_type_backport>=0.2.0; python_version < "3.10"

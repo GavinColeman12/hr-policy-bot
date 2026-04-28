@@ -110,7 +110,23 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-### Frontend
+### Streamlit (primary UI)
+
+The Streamlit dashboard at `streamlit_app/` is the canonical interface — it
+combines the search/curation view with admin tabs (Runs, Cost, Cache).
+
+```bash
+python -m venv streamlit_app/.venv
+streamlit_app/.venv/bin/pip install -r streamlit_app/requirements.txt
+streamlit_app/.venv/bin/streamlit run streamlit_app/app.py
+# → http://localhost:8501
+```
+
+### React frontend (legacy, optional)
+
+The earlier React UI at `frontend/` is still in the repo but is no longer
+the primary interface. It only covers the user-facing search experience —
+no Runs / Cost / Cache. Run it if you want a non-admin view:
 
 ```bash
 cd frontend

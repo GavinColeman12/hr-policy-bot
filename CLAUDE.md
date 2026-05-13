@@ -1,10 +1,13 @@
-# City Event Crawler — Handoff
+# City Event Crawler — Handoff (CLAUDE.md)
 
 _Last updated: 2026-04-29 (end of build session)._
 
-This document is the single source of truth for someone (or future-you, or
-another agent) to pick up this project cold. Read it top-to-bottom; everything
-load-bearing is here.
+This file is the single source of truth for the City Event Crawler project.
+It lives at the repo root with the conventional name `CLAUDE.md` so it
+auto-loads at the start of any Claude Code session.
+
+Read it top-to-bottom before touching anything; every load-bearing piece
+of context is here.
 
 ---
 
@@ -472,9 +475,9 @@ assistant should be treated as exposed.
 ## 13. References
 
 - **Design spec**:
-  [`docs/superpowers/specs/2026-04-27-postgres-streamlit-apify-cost-control-design.md`](superpowers/specs/2026-04-27-postgres-streamlit-apify-cost-control-design.md)
+  [`docs/docs/superpowers/specs/2026-04-27-postgres-streamlit-apify-cost-control-design.md`](docs/superpowers/specs/2026-04-27-postgres-streamlit-apify-cost-control-design.md)
 - **Implementation plan**:
-  [`docs/superpowers/plans/2026-04-27-postgres-streamlit-apify-cost-control.md`](superpowers/plans/2026-04-27-postgres-streamlit-apify-cost-control.md)
+  [`docs/docs/superpowers/plans/2026-04-27-postgres-streamlit-apify-cost-control.md`](docs/superpowers/plans/2026-04-27-postgres-streamlit-apify-cost-control.md)
 - **README** at repo root — quick-start overview.
 - **Apify pricing**: each actor's pricing tab on its Apify Store page.
   Verify against `APIFY_POSTS_USD_PER_1K` and `APIFY_STORIES_USD_PER_1K`

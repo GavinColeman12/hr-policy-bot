@@ -1,5 +1,7 @@
 # City Event Crawler v2
 
+> **Picking this project up cold?** Start with [`CLAUDE.md`](CLAUDE.md) at the repo root — it's the full handoff doc (architecture, deploy state, run instructions, known issues, decision log, troubleshooting matrix).
+
 Instagram-only deep discovery for European cities, with Claude-powered curation. Output isn't a flat list of events — it's an evening guide: a top pick, a 3–5 step itinerary, hidden gems, and a skip list, all curated for a 20–30 year old audience.
 
 ## Pipeline
